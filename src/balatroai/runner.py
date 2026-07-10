@@ -1,0 +1,79 @@
+"""Game runner: drives one bot through one game.
+
+Snapshot in, actions out (doctrine 02): the bot only ever sees the gamestate
+dict and returns an Action; the runner owns all server communication, applies
+per-state fallbacks when an action is rejected, and enforces a step watchdog.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Callable
+
+from .bots import Action, Bot
+from .client import Client, RPCError
+
+# Safe action per state when the bot's action is rejected. Each fallback
+# advances the game, so a rejected action can never loop forever.
+FALLBACKS: dict[str, Action] = {
+    "BLIND_SELECT": Action("select"),
+    "SELECTING_HAND": Action("play", {"cards": [0]}),
+    "ROUND_EVAL": Action("cash_out"),
+    "SHOP": Action("next_round"),
+    "SMODS_BOOSTER_OPENED": Action("pack", {"skip": True}),
+}
+
+Emit = Callable[[dict, Action, str | None], None]
+
+
+@dataclass
+class GameResult:
+    won: bool
+    ante: int
+    round: int
+    seed: str
+    steps: int
+
+
+class Runner:
+    def __init__(self, client: Client, bot: Bot, emit: Emit | None = None,
+                 max_steps: int = 3000):
+        self.client = client
+        self.bot = bot
+        self.emit = emit or (lambda *_: None)
+        self.max_steps = max_steps
+
+    def play_game(self, deck: str = "RED", stake: str = "WHITE",
+                  seed: str | None = None) -> GameResult:
+        try:
+            self.client.call("menu")
+        except RPCError:
+            pass  # already at menu
+        params: dict = {"deck": deck, "stake": stake}
+        if seed:
+            params["seed"] = seed
+        state = self.client.call("start", params)
+
+        steps = 0
+        while state.get("state") != "GAME_OVER" and steps < self.max_steps:
+            steps += 1
+            action = self.bot.act(state)
+            error = None
+            try:
+                state = self.client.call(action.method, action.params)
+            except RPCError as e:
+                error = str(e)
+                fb = FALLBACKS.get(state.get("state", ""), Action("gamestate"))
+                try:
+                    state = self.client.call(fb.method, fb.params)
+                except RPCError:
+                    state = self.client.call("gamestate")
+            self.emit(state, action, error)
+
+        return GameResult(
+            won=bool(state.get("won")),
+            ante=state.get("ante_num", 0),
+            round=state.get("round_num", 0),
+            seed=state.get("seed", seed or "?"),
+            steps=steps,
+        )

@@ -1,0 +1,16 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "balatroai"
+version = "0.1.0"
+description = "Bots for Balatro, driven through the balatrobot JSON-RPC API"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+balatroai = "balatroai.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/balatroai"]
