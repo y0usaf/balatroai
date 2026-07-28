@@ -24,11 +24,17 @@ from torch import nn
 
 from jackdaw.env.balatro_spec import balatro_game_spec
 from jackdaw.env.gymnasium_wrapper import MAX_ACTIONS
+from jackdaw.env.observation import NUM_CENTER_KEYS
 
 from policy import ENTITIES, GLOBAL_DIM, OBS_DIM, flatten_obs, unflatten_obs  # noqa: F401 (re-export)
 
 _SPEC = balatro_game_spec()
 N_ACTION_TYPES = len(_SPEC.action_types)
+# Jokers, consumables and shop items are identified only by feature 0,
+# center_key_id / NUM_CENTER_KEYS. As a scalar that is nearly useless: two
+# consecutive ids are unrelated effects but look almost identical, so the net
+# cannot learn what any specific joker does. Recover the id and embed it.
+_KEYED_ENTITIES = {"joker", "consumable", "shop_item"}
 # action type -> entity type index (-1 = no entity target)
 _ETI = [at.entity_type_index for at in _SPEC.action_types]
 # entity type index -> base offset in the token sequence (global token at 0)
@@ -108,6 +114,10 @@ class PointerPolicy(nn.Module):
             {name: nn.Linear(feat, d_model) for name, _, feat in ENTITIES}
         )
         self.ent_type_emb = nn.Embedding(len(ENTITIES), d_model)
+        # Shared across joker/consumable/shop_item: the same center key means
+        # the same object whether it sits in the shop or in your joker slots,
+        # and ent_type_emb already tells the net which of the two it is.
+        self.center_emb = nn.Embedding(NUM_CENTER_KEYS + 1, d_model)
         layer = nn.TransformerEncoderLayer(
             d_model=d_model, nhead=n_heads, dim_feedforward=4 * d_model,
             batch_first=True, norm_first=True, dropout=0.0,
@@ -143,6 +153,11 @@ class PointerPolicy(nn.Module):
         valid = [torch.ones(batch, 1, dtype=torch.bool, device=device)]
         for i, (name, max_count, _) in enumerate(ENTITIES):
             emb = self.entity_proj[name](obs[name]) + self.ent_type_emb.weight[i]
+            if name in _KEYED_ENTITIES:
+                # Feature 0 is center_key_id / NUM_CENTER_KEYS; invert it.
+                # Empty slots decode to id 0, which the padding mask drops.
+                ids = (obs[name][..., 0] * NUM_CENTER_KEYS).round().long()
+                emb = emb + self.center_emb(ids.clamp(0, NUM_CENTER_KEYS))
             tokens.append(emb)
             slots = torch.arange(max_count, device=device).unsqueeze(0)
             valid.append(slots < counts[:, i].unsqueeze(1))
