@@ -41,11 +41,14 @@ def worker_proc(
     obs_ev,
     stats_q,
     max_steps: int,
+    gamma: float,
+    shaping_coef: float,
 ) -> None:
     from jackdaw.env.game_interface import DirectAdapter
     from jackdaw.env.gymnasium_wrapper import MAX_ACTIONS, BalatroGymnasiumEnv
 
     from policy_v3 import OBS_DIM, encode_action_table, flatten_obs
+    from shaping import PotentialShaper
 
     shms = {n: shared_memory.SharedMemory(name=s) for n, s in shm_names.items()}
     obs_buf = np.ndarray((n_total, OBS_DIM), dtype=np.float32, buffer=shms["obs"].buf)
@@ -58,6 +61,7 @@ def worker_proc(
 
     lo = rank * k
     envs = []
+    shapers = []
     for i in range(k):
         env = BalatroGymnasiumEnv(
             adapter_factory=DirectAdapter,
@@ -70,6 +74,10 @@ def worker_proc(
         nact_buf[lo + i] = len(env._action_table)
         encode_action_table(env._action_table, acts_buf[lo + i])
         envs.append(env)
+        shaper = PotentialShaper(gamma, shaping_coef)
+        if shaping_coef:
+            shaper.reset(env._inner._adapter.raw_state)
+        shapers.append(shaper)
     obs_ev.set()
 
     while True:
@@ -79,6 +87,12 @@ def worker_proc(
             gi = lo + i
             obs, r, term, trunc, info = env.step(int(act_buf[gi]))
             done = term or trunc
+            if shaping_coef:
+                # F = gamma*PHI(s') - PHI(s), with PHI(terminal) = 0. Must be
+                # read before reset, or the potential of the *next* episode's
+                # opening state leaks into this episode's final reward.
+                r += shapers[i].step(
+                    None if done else env._inner._adapter.raw_state, done)
             if done:
                 stats_q.put(
                     (
@@ -88,6 +102,8 @@ def worker_proc(
                     )
                 )
                 obs, _ = env.reset()
+                if shaping_coef:
+                    shapers[i].reset(env._inner._adapter.raw_state)
             obs_buf[gi] = flatten_obs(obs)
             nact_buf[gi] = len(env._action_table)
             encode_action_table(env._action_table, acts_buf[gi])
@@ -112,6 +128,9 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--lr", type=float, default=2.5e-4)
     parser.add_argument("--gamma", type=float, default=0.999)
+    parser.add_argument("--shaping-coef", type=float, default=1.0,
+                        help="scale of the potential-based shaping term "
+                             "(money/jokers/hand levels); 0 disables it")
     parser.add_argument("--gae-lambda", type=float, default=0.95)
     parser.add_argument("--clip", type=float, default=0.2)
     parser.add_argument("--ent-coef", type=float, default=0.01)
@@ -191,7 +210,8 @@ def main() -> None:
         p = ctx.Process(
             target=worker_proc,
             args=(w, args.envs_per_worker, n_env, shm_names,
-                  act_evs[w], obs_evs[w], stats_q, args.max_steps),
+                  act_evs[w], obs_evs[w], stats_q, args.max_steps,
+                  args.gamma, args.shaping_coef),
             daemon=True,
         )
         p.start()
