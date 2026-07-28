@@ -26,7 +26,7 @@ is the source of truth for the wire schema.
 | 04 declarative front, idempotent executor | n/a | no system state is managed |
 | 05 one declaration mechanism | follows | every bot declared via `bots.register`; no hand-wired dispatch |
 | 06 bare core must boot | follows | random bot + runner completes a game with zero heuristics; `nix flake check` runs the offline bare-core check (poker selftest, CLI, registry); the jackdaw `sim` extra is opt-in and lazily imported, so the bare core boots without it |
-| 07 nix source of truth | follows (with gap) | flake builds the package and runs checks; `uv run` is the dev-loop fallback (game server can't run in the sandbox); the `sim` extra resolves via uv git-rev pin to our fork (`github.com:y0usaf/jackdaw-balatro`), not the flake — fold into the flake if the sim backend graduates from optional |
+| 07 nix source of truth | follows (with gap) | flake builds the package and runs checks; `uv run` is the day-to-day dev loop; the `sim` extra resolves via uv git-rev pin to our fork (`github.com:y0usaf/jackdaw-balatro`), not the flake — fold into the flake if the sim backend graduates from optional |
 
 ## Locked decisions
 
