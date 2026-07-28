@@ -6,8 +6,22 @@ build-backend = "hatchling.build"
 name = "balatroai"
 version = "0.1.0"
 description = "Bots for Balatro, driven through the balatrobot JSON-RPC API"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = []
+
+[project.optional-dependencies]
+# jackdaw = validated 1:1 Balatro simulator (live-parity branch: our 11
+# divergence fixes vs Balatro 1.0.1o + smods).  Core stays stdlib-only;
+# the sim backend is opt-in: `uv sync --extra sim`.
+sim = ["jackdaw"]
+# train = RL training stack (torch, sb3-contrib) via jackdaw's train extra.
+train = ["jackdaw[train]"]
+
+[tool.uv.sources]
+# Our fork (github.com:y0usaf/jackdaw-balatro, mirrored on forgejo at
+# y0usaf-server:3000) carrying the live-parity engine fixes. Rev-pinned for
+# reproducibility; bump by updating `rev` and re-running `uv lock`.
+jackdaw = { git = "ssh://git@github.com/y0usaf/jackdaw-balatro.git", rev = "639dd2234123eae32a7c4676a0136423f491a36f" }
 
 [project.scripts]
 balatroai = "balatroai.cli:main"
