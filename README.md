@@ -55,9 +55,18 @@ core stays stdlib-only; without the extra, `--backend live` works as before.
 ## Development
 
 ```bash
-nix develop          # python + uv + ruff
+nix develop          # python + uv + ruff + GPU lib paths
 nix flake check      # bare-core check (offline: poker selftest, CLI, registry)
 uv run balatroai --help
+uv sync --extra train   # torch + sb3-contrib for RL
+```
+
+GPU training (CUDA, torch wheels) needs `LD_LIBRARY_PATH` covering the
+nix-ld set + `/run/opengl-driver/lib` (NVIDIA userspace libs) — `nix develop`
+exports this for you; outside it, run:
+
+```bash
+export LD_LIBRARY_PATH="$NIX_LD_LIBRARY_PATH:/run/opengl-driver/lib"
 ```
 
 ## Writing a bot

@@ -23,6 +23,13 @@
       devShells = forAll (pkgs: {
         default = pkgs.mkShell {
           packages = [ pkgs.python3 pkgs.uv pkgs.ruff ];
+
+          # GPU training env: manylinux torch wheels dlopen libstdc++/zlib
+          # (covered by the system nix-ld set) plus the NVIDIA driver
+          # userspace libs, which live outside it at /run/opengl-driver/lib.
+          shellHook = ''
+            export LD_LIBRARY_PATH="''${NIX_LD_LIBRARY_PATH:+$NIX_LD_LIBRARY_PATH:}/run/opengl-driver/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          '';
         };
       });
 
