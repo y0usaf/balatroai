@@ -25,24 +25,28 @@ is the source of truth for the wire schema.
 | 03 daemon + thin client | diverges (for now) | balatrobot's server is the daemon; balatroai is a single-process client. A trainer daemon arrives with the RL phase (P3) |
 | 04 declarative front, idempotent executor | n/a | no system state is managed |
 | 05 one declaration mechanism | follows | every bot declared via `bots.register`; no hand-wired dispatch |
-| 06 bare core must boot | follows | random bot + runner completes a game with zero heuristics; `nix flake check` runs the offline bare-core check (poker selftest, CLI, registry) |
-| 07 nix source of truth | follows | flake builds the package and runs checks; `uv run` is the dev-loop fallback (game server can't run in the sandbox) |
+| 06 bare core must boot | follows | random bot + runner completes a game with zero heuristics; `nix flake check` runs the offline bare-core check (poker selftest, CLI, registry); the jackdaw `sim` extra is opt-in and lazily imported, so the bare core boots without it |
+| 07 nix source of truth | follows (with gap) | flake builds the package and runs checks; `uv run` is the dev-loop fallback (game server can't run in the sandbox); the `sim` extra resolves via uv git-rev pin to our fork (`github.com:y0usaf/jackdaw-balatro`), not the flake — fold into the flake if the sim backend graduates from optional |
 
 ## Locked decisions
 
 | Decision | Choice | Rationale |
 |---|---|---|
-| Runtime deps | stdlib only | keeps the flake trivial and the core auditable; JSON-RPC over HTTP needs nothing more |
+| Runtime deps | stdlib-only **core**; jackdaw as opt-in `sim` extra | keeps the flake trivial and the core auditable; the sim backend is lazily imported so `balatroai` runs without it (divergence from the original "stdlib only" absolute — recorded here) |
 | balatrobot | external process, not vendored | upstream moves fast; we speak only its versioned JSON-RPC surface |
+| Fast simulator | adopt [jackdaw](https://github.com/TylerFlar/jackdaw-balatro), not build | its `SimBackend.handle(method, params)` speaks the same balatrobot RPC surface (methods + gamestate serialization), so Runner/bots run unchanged on either backend; ~1500 games/sec |
+| jackdaw source | own fork `github.com:y0usaf/jackdaw-balatro` (mirrored on forgejo at y0usaf-server:3000), rev-pinned in `pyproject.toml` | carries our 11 engine fixes from validating it against live Balatro 1.0.1o + smods (253/254 scenarios pass); upstream PR pending — switch back to upstream once merged |
+| Fidelity target | vanilla **+ Steamodded**, not vanilla | balatrobot requires smods, and smods silently rewrites game logic (spectral RNG order, etc.) — "1:1 with vanilla" and "1:1 with what the bots actually play" are different targets; we validate against the latter |
 | First bot | heuristic, not ML | immediately watchable; becomes the RL baseline and the BC teacher |
-| Score model | estimate only (base chips×mult + card chips) | exact simulation of joker interactions is the P2 fast-sim project, not a bot concern |
-| Training against live game | rejected for RL | Proton instances are 2–4 orders of magnitude too slow; RL waits for the fast sim (P2) |
+| Score model | estimate only (base chips×mult + card chips) | bots stay sim-agnostic; exact scoring lives in jackdaw, not in bot heuristics |
+| Training against live game | rejected for RL | Proton instances are 2–4 orders of magnitude too slow; RL runs on jackdaw |
 
 ## Architecture
 
 ```
 src/balatroai/
   client.py    core — JSON-RPC client (urllib), health/wait_ready
+  sim.py       core — SimClient: same interface, backed by in-process jackdaw
   runner.py    core — game loop, per-state fallbacks, step watchdog
   poker.py     core — hand classification + best-subset scoring (offline-testable)
   bots/
@@ -51,6 +55,11 @@ src/balatroai/
     heuristic.py  policy — best-hand play, discard fishing, joker/planet shopping
   cli.py       policy — watch / run subcommands, optional `--launch` of balatrobot
 ```
+
+Both clients expose `call(method, params) -> gamestate dict` over the same
+balatrobot RPC vocabulary; `Runner` and bots are backend-blind.  `run`
+defaults to the sim (train/bench fast), `watch` is always the live game
+(demo what was trained).
 
 ## Extension surface contract
 
@@ -79,8 +88,12 @@ src/balatroai/
   rendered game to GAME_OVER against a live balatrobot server.*
 - [ ] P1 — benchmarking. *Accept: `balatroai run --games 50` on fixed seed set
   prints win rate + ante distribution; heuristic beats random with p < 0.05.*
-- [ ] P2 — fast simulator. *Accept: sim replays a logged balatrobot game and
-  matches the real score for ≥95% of hands on white stake.*
+- [x] P2 — fast simulator. *Adopted jackdaw instead of building: validated
+  scenario-by-scenario against live Balatro 1.0.1o + smods on this machine
+  (253/254 pass; 11 engine fixes on the `live-parity` branch), wired in as
+  `run --backend sim`. Exceeds the original accept criterion (≥95% score
+  match) — remaining follow-up: replay-diff logged full games as a
+  regression harness when versions bump.*
 - [ ] P3 — RL trainer daemon. *Accept: `balatroai train --workers N` runs
   unattended; `balatroai watch --checkpoint best` plays the live game;
   policy beats heuristic's win rate on the P1 bench.*

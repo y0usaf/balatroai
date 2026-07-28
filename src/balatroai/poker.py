@@ -92,7 +92,8 @@ def hand_value(name: str, hands_info: dict | None) -> tuple[int, int]:
     if hands_info and name in hands_info:
         h = hands_info[name]
         chips, mult = h.get("chips", 0), h.get("mult", 0)
-        if chips and mult:
+        # guard: mods like Talisman serialize these as big-number dicts
+        if isinstance(chips, int) and isinstance(mult, int) and chips > 0 and mult > 0:
             return chips, mult
     return BASE_HANDS[name]
 

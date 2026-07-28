@@ -4,4 +4,3 @@ __pycache__/
 dist/
 result
 logs/
-uv.lock

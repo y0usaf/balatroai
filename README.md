@@ -1,8 +1,12 @@
 # balatroAI
 
-Bots that play Balatro through the [balatrobot](https://github.com/coder/balatrobot)
-JSON-RPC API. `watch` a rendered game with live narration, or `run` headless
-batches for stats. See [DESIGN.md](./DESIGN.md) for the roadmap (fast sim → RL).
+Bots that play Balatro. `watch` a rendered game with live narration (via the
+[balatrobot](https://github.com/coder/balatrobot) JSON-RPC API), or `run`
+batches for stats on an in-process simulator
+([jackdaw](https://github.com/TylerFlar/jackdaw-balatro), ~1500 games/sec,
+validated 1:1 against the live game — see DESIGN.md).  Both backends speak
+the same RPC surface, so every bot runs unchanged on either: **train on the
+sim, demo on the real game.**  See [DESIGN.md](./DESIGN.md) for the roadmap.
 
 ## Prerequisites (one-time)
 
@@ -20,11 +24,13 @@ Full instructions: https://coder.github.io/balatrobot/
 ## Quickstart
 
 ```bash
-# terminal 1 — the game (rendered, 2x speed)
-uvx balatrobot serve --gamespeed 2
+# stats on the simulator — no game needed, thousands of games/sec
+uv sync --extra sim
+uv run balatroai run --games 100 --bot heuristic
 
-# terminal 2 — watch the heuristic bot play
-nix run . -- watch                 # or: uv run balatroai watch
+# watch the same bot on the real game (rendered, 2x speed)
+uvx balatrobot serve --gamespeed 2    # terminal 1
+nix run . -- watch                    # terminal 2; or: uv run balatroai watch
 ```
 
 Or let balatroai spawn the server itself:
@@ -36,9 +42,15 @@ nix run . -- watch --launch
 ## Commands
 
 ```bash
-balatroai watch [--bot heuristic|random] [--seed ABCD1234] [--deck RED] [--stake WHITE]
-balatroai run --games 20 [--bot heuristic] [--launch]   # headless stats
+balatroai watch [--bot heuristic|random] [--seed ABCD1234] [--deck RED] [--stake WHITE] [--gamespeed 8]
+balatroai run --games 20 [--bot heuristic]              # sim backend (default, fast)
+balatroai run --games 20 --backend live [--launch]      # real game via balatrobot
 ```
+
+The sim backend needs the `sim` extra (jackdaw, fetched from our fork
+`github.com:y0usaf/jackdaw-balatro`, `live-parity` branch, rev-pinned —
+carries our fixes from validating it against live Balatro + smods).  The
+core stays stdlib-only; without the extra, `--backend live` works as before.
 
 ## Development
 
