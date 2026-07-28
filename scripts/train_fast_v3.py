@@ -343,6 +343,11 @@ def main() -> None:
         b_act = act_s.reshape(-1)
         b_logp = logp_s.reshape(-1)
         b_adv = adv.reshape(-1)
+        # Normalize advantages over the whole batch, not per minibatch: since
+        # minibatches are sorted by action-table width they each hold roughly
+        # one game phase, and per-minibatch normalization would rescale that
+        # phase's local noise to unit variance and erase cross-phase signal.
+        b_adv = (b_adv - b_adv.mean()) / (b_adv.std() + 1e-8)
         b_ret = ret.reshape(-1)
         batch = T * n_env
         # Even splits: a short trailing minibatch is a different shape, which
@@ -370,7 +375,6 @@ def main() -> None:
                 logp = dist.log_prob(b_act[mb])
                 ratio = (logp - b_logp[mb]).exp()
                 madv = b_adv[mb]
-                madv = (madv - madv.mean()) / (madv.std() + 1e-8)
                 pg = torch.max(
                     -madv * ratio,
                     -madv * ratio.clamp(1 - args.clip, 1 + args.clip),
