@@ -104,8 +104,8 @@ def worker_proc(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Pointer-policy PPO on Balatro")
     parser.add_argument("--total-steps", type=int, default=200_000_000)
-    parser.add_argument("--workers", type=int, default=26)
-    parser.add_argument("--envs-per-worker", type=int, default=8)
+    parser.add_argument("--workers", type=int, default=30)
+    parser.add_argument("--envs-per-worker", type=int, default=12)
     parser.add_argument("--groups", type=int, default=3)
     parser.add_argument("--rollout", type=int, default=128)
     parser.add_argument("--minibatch", type=int, default=8192)
@@ -122,13 +122,24 @@ def main() -> None:
     parser.add_argument("--checkpoint-every", type=int, default=2_000_000)
     parser.add_argument("--resume", type=str, default=None)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--d-model", type=int, default=128)
+    parser.add_argument("--n-heads", type=int, default=4)
+    parser.add_argument("--n-layers", type=int, default=2)
+    parser.add_argument("--ent-coef-final", type=float, default=None,
+                        help="linearly anneal --ent-coef to this by the end")
+    parser.add_argument("--lr-final", type=float, default=None,
+                        help="linearly anneal --lr to this by the end")
+    parser.add_argument("--compile", choices=("none", "default", "cudagraph"),
+                        default="none",
+                        help="torch.compile the policy (bucketed action dim); "
+                             "cudagraph also captures rollout forwards")
     args = parser.parse_args()
 
     from torch.utils.tensorboard import SummaryWriter
 
     from jackdaw.env.gymnasium_wrapper import MAX_ACTIONS
 
-    from policy_v3 import OBS_DIM, PointerPolicy, masked_dist
+    from policy_v3 import OBS_DIM, PointerPolicy, bucket_actions, masked_dist
 
     torch.manual_seed(args.seed)
     torch.backends.cudnn.benchmark = True
@@ -196,15 +207,39 @@ def main() -> None:
     ]
     group_idx = [torch.as_tensor(i, device=device) for i in group_idx_np]
 
-    policy = PointerPolicy().to(device)
-    opt = torch.optim.Adam(policy.parameters(), lr=args.lr, eps=1e-5)
+    net_cfg = {"d_model": args.d_model, "n_heads": args.n_heads,
+               "n_layers": args.n_layers}
+    policy = PointerPolicy(**net_cfg).to(device)
+    n_params = sum(p.numel() for p in policy.parameters())
+    opt = torch.optim.Adam(policy.parameters(), lr=args.lr, eps=1e-5, fused=True)
     global_step = 0
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device)
+        # Checkpoints written before net_cfg existed are all the d=128/2-layer
+        # default, so a missing key is not ambiguous.
+        ck_cfg = ckpt.get("net_cfg", {"d_model": 128, "n_heads": 4, "n_layers": 2})
+        if ck_cfg != net_cfg:
+            raise SystemExit(
+                f"checkpoint architecture {ck_cfg} != requested {net_cfg}; "
+                "resume needs matching --d-model/--n-heads/--n-layers")
         policy.load_state_dict(ckpt["model"])
         opt.load_state_dict(ckpt["opt"])
         global_step = ckpt["step"]
         print(f"resumed from {args.resume} at step {global_step:,}")
+
+    # Rollout forwards are latency-bound: measured 1.82 ms/call eager, 0.85 ms
+    # compiled, 0.46 ms with cuda graphs (d=128 net, batch 120, a_eff 128), so
+    # the win is fewer kernel launches rather than more FLOPs. Bucketing the
+    # action dim keeps shapes static enough for the compiled variants to stay
+    # cached. Rollout and update get separate handles: graph capture is only
+    # safe for the inference-mode rollout, the update keeps a normal compile.
+    if args.compile == "cudagraph":
+        policy_roll = torch.compile(policy, dynamic=False, mode="reduce-overhead")
+        policy_upd = torch.compile(policy, dynamic=False)
+    elif args.compile == "default":
+        policy_roll = policy_upd = torch.compile(policy, dynamic=False)
+    else:
+        policy_roll = policy_upd = policy
 
     obs_s = torch.zeros((T, n_env, OBS_DIM), device=device)
     acts_s = torch.zeros((T, n_env, A, 3), dtype=torch.int16, device=device)
@@ -229,18 +264,33 @@ def main() -> None:
     print(f"{args.workers} workers x {args.envs_per_worker} envs = {n_env} envs, "
           f"{args.groups} groups, rollout {T} ({T * n_env:,} steps/iter), "
           f"action table {A}")
+    print(f"policy d_model={args.d_model} heads={args.n_heads} "
+          f"layers={args.n_layers} params={n_params:,} compile={args.compile}")
+
+    start_step = global_step
+
+    def _anneal(start: float, final: float | None) -> float:
+        """Linear schedule over the remaining budget of this run."""
+        if final is None or args.total_steps <= start_step:
+            return start
+        frac = (global_step - start_step) / (args.total_steps - start_step)
+        return start + (final - start) * min(max(frac, 0.0), 1.0)
 
     while global_step < args.total_steps:
         t_start = time.time()
+        lr_now = _anneal(args.lr, args.lr_final)
+        ent_now = _anneal(args.ent_coef, args.ent_coef_final)
+        for pg_group in opt.param_groups:
+            pg_group["lr"] = lr_now
 
         with torch.inference_mode():
             for t in range(T):
                 for gi, g in enumerate(groups):
                     idx, idx_np = group_idx[gi], group_idx_np[gi]
-                    a_eff = int(last_n[idx].max())
+                    a_eff = bucket_actions(int(last_n[idx].max()))
                     o, ac_full = last_obs[idx], last_acts[idx]
                     with torch.autocast("cuda", torch.bfloat16):
-                        logits, v = policy(o, ac_full[:, :a_eff])
+                        logits, v = policy_roll(o, ac_full[:, :a_eff])
                     logits, v = logits.float(), v.float()
                     dist = masked_dist(logits, last_n[idx])
                     a = dist.sample()
@@ -266,7 +316,8 @@ def main() -> None:
                         nact_buf[idx_np].astype(np.int64), device=device)
 
             with torch.autocast("cuda", torch.bfloat16):
-                _, boot_v = policy(last_obs, last_acts[:, : int(last_n.max())])
+                _, boot_v = policy_upd(
+                    last_obs, last_acts[:, : bucket_actions(int(last_n.max()))])
             boot_v = boot_v.float()
             adv = torch.zeros_like(rew_s)
             last_gae = torch.zeros(n_env, device=device)
@@ -289,15 +340,19 @@ def main() -> None:
         b_adv = adv.reshape(-1)
         b_ret = ret.reshape(-1)
         batch = T * n_env
+        # Even splits: a short trailing minibatch is a different shape, which
+        # costs a torch.compile recompilation every iteration.
+        n_mb = max(1, round(batch / args.minibatch))
+        mb_size = batch // n_mb
         pg_l = vf_l = ent_l = kl = 0.0
         n_upd = 0
         for _ in range(args.epochs):
             perm = torch.randperm(batch, device=device)
-            for s in range(0, batch, args.minibatch):
-                mb = perm[s : s + args.minibatch]
-                a_eff = int(b_nact[mb].max())
+            for s in range(0, n_mb * mb_size, mb_size):
+                mb = perm[s : s + mb_size]
+                a_eff = bucket_actions(int(b_nact[mb].max()))
                 with torch.autocast("cuda", torch.bfloat16):
-                    logits, v = policy(b_obs[mb], b_acts[mb, :a_eff])
+                    logits, v = policy_upd(b_obs[mb], b_acts[mb, :a_eff])
                 logits, v = logits.float(), v.float()
                 dist = masked_dist(logits, b_nact[mb])
                 logp = dist.log_prob(b_act[mb])
@@ -310,7 +365,7 @@ def main() -> None:
                 ).mean()
                 vf = 0.5 * (v - b_ret[mb]).pow(2).mean()
                 ent = dist.entropy().mean()
-                loss = pg + args.vf_coef * vf - args.ent_coef * ent
+                loss = pg + args.vf_coef * vf - ent_now * ent
                 opt.zero_grad(set_to_none=True)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(policy.parameters(), args.max_grad_norm)
@@ -332,6 +387,8 @@ def main() -> None:
         writer.add_scalar("loss/value", vf_l / n_upd, global_step)
         writer.add_scalar("loss/entropy", ent_l / n_upd, global_step)
         writer.add_scalar("loss/approx_kl", kl / n_upd, global_step)
+        writer.add_scalar("hp/lr", lr_now, global_step)
+        writer.add_scalar("hp/ent_coef", ent_now, global_step)
         line = (f"step {global_step:>12,}  sps {sps:>6,}  "
                 f"c/u {t_collect:.1f}/{t_iter - t_collect:.1f}s")
         if ep_antes:
@@ -347,13 +404,13 @@ def main() -> None:
 
         if global_step >= next_ckpt:
             ck = {"model": policy.state_dict(), "opt": opt.state_dict(),
-                  "step": global_step}
+                  "step": global_step, "net_cfg": net_cfg}
             torch.save(ck, log_path / f"ckpt_{global_step}.pt")
             torch.save(ck, log_path / "latest.pt")
             next_ckpt += args.checkpoint_every
 
     torch.save({"model": policy.state_dict(), "opt": opt.state_dict(),
-                "step": global_step}, log_path / "final.pt")
+                "step": global_step, "net_cfg": net_cfg}, log_path / "final.pt")
     print(f"done — saved {log_path / 'final.pt'}")
 
 

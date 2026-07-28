@@ -26,8 +26,8 @@ train = [
 
 [package.metadata]
 requires-dist = [
-    { name = "jackdaw", marker = "extra == 'sim'", git = "ssh://git@github.com/y0usaf/jackdaw-balatro.git?rev=639dd2234123eae32a7c4676a0136423f491a36f" },
-    { name = "jackdaw", extras = ["train"], marker = "extra == 'train'", git = "ssh://git@github.com/y0usaf/jackdaw-balatro.git?rev=639dd2234123eae32a7c4676a0136423f491a36f" },
+    { name = "jackdaw", marker = "extra == 'sim'", git = "ssh://git@github.com/y0usaf/jackdaw-balatro.git?rev=ca26457791818e5795b28514a8c78069112c3d55" },
+    { name = "jackdaw", extras = ["train"], marker = "extra == 'train'", git = "ssh://git@github.com/y0usaf/jackdaw-balatro.git?rev=ca26457791818e5795b28514a8c78069112c3d55" },
 ]
 provides-extras = ["sim", "train"]
 
@@ -201,7 +201,7 @@ wheels = [
 [[package]]
 name = "jackdaw"
 version = "0.1.0"
-source = { git = "ssh://git@github.com/y0usaf/jackdaw-balatro.git?rev=639dd2234123eae32a7c4676a0136423f491a36f#639dd2234123eae32a7c4676a0136423f491a36f" }
+source = { git = "ssh://git@github.com/y0usaf/jackdaw-balatro.git?rev=ca26457791818e5795b28514a8c78069112c3d55#ca26457791818e5795b28514a8c78069112c3d55" }
 dependencies = [
     { name = "gymnasium" },
     { name = "numpy" },

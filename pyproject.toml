@@ -21,7 +21,7 @@ train = ["jackdaw[train]"]
 # Our fork (github.com:y0usaf/jackdaw-balatro, mirrored on forgejo at
 # y0usaf-server:3000) carrying the live-parity engine fixes. Rev-pinned for
 # reproducibility; bump by updating `rev` and re-running `uv lock`.
-jackdaw = { git = "ssh://git@github.com/y0usaf/jackdaw-balatro.git", rev = "639dd2234123eae32a7c4676a0136423f491a36f" }
+jackdaw = { git = "ssh://git@github.com/y0usaf/jackdaw-balatro.git", rev = "ca26457791818e5795b28514a8c78069112c3d55" }
 
 [project.scripts]
 balatroai = "balatroai.cli:main"

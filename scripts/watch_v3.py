@@ -95,7 +95,9 @@ def main() -> None:
                  "(start one or pass --launch)")
 
     ckpt = torch.load(args.model, map_location="cpu")
-    policy = PointerPolicy()
+    # Pre-net_cfg checkpoints are all the d=128/2-layer default.
+    policy = PointerPolicy(**ckpt.get(
+        "net_cfg", {"d_model": 128, "n_heads": 4, "n_layers": 2}))
     policy.load_state_dict(ckpt["model"])
     policy.eval()
     print(f"model: {args.model} @ step {ckpt.get('step', '?'):,}")

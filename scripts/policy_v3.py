@@ -41,20 +41,55 @@ N_TOKENS = _off
 HAND_MAX = ENTITIES[0][1]  # hand_card is entity type 0
 
 
+# Action tables are rebuilt every step and can hold ~768 rows, so this is hot:
+# it was 101 us/step (22% of a worker's CPU) when written as per-cell numpy
+# item assignment. Build plain Python rows, then hand numpy one array.
+_BITMASK_CACHE: dict[tuple[int, ...], int] = {}
+
+
+def _bitmask(cards) -> int:
+    key = tuple(cards)
+    bm = _BITMASK_CACHE.get(key)
+    if bm is None:
+        bm = 0
+        for c in key:
+            bm |= 1 << c
+        _BITMASK_CACHE[key] = bm
+    return bm
+
+
 def encode_action_table(table, out: np.ndarray) -> None:
     """Encode a wrapper action table into an (A, 3) int16 array in-place.
 
     Columns: [action_type, entity_target (-1 = none), card bitmask].
     Only ``len(table)`` rows are written; callers mask by n_actions.
     """
-    for j, fa in enumerate(table):
-        out[j, 0] = fa.action_type
-        out[j, 1] = -1 if fa.entity_target is None else fa.entity_target
-        bm = 0
-        if fa.card_target:
-            for c in fa.card_target:
-                bm |= 1 << c
-        out[j, 2] = bm
+    n = len(table)
+    if n == 0:
+        return
+    rows = [
+        (
+            fa.action_type,
+            -1 if fa.entity_target is None else fa.entity_target,
+            _bitmask(fa.card_target) if fa.card_target else 0,
+        )
+        for fa in table
+    ]
+    out[:n] = np.array(rows, dtype=np.int16)
+
+
+# Padding buckets for the action dimension. torch.compile / cuda graphs need
+# static shapes; without bucketing every distinct table width triggers a
+# recompile, with it we pay at most len(A_BUCKETS) compilations.
+A_BUCKETS: tuple[int, ...] = (16, 32, 64, 128, 256, 512, 768)
+
+
+def bucket_actions(n: int) -> int:
+    """Smallest bucket >= n (the largest bucket for anything oversized)."""
+    for b in A_BUCKETS:
+        if n <= b:
+            return b
+    return A_BUCKETS[-1]
 
 
 class PointerPolicy(nn.Module):
