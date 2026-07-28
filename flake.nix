@@ -65,7 +65,19 @@
               export TRITON_CUOBJDUMP_PATH="$_wrap/cuobjdump"
               export TRITON_NVDISASM_PATH="$_wrap/nvdisasm"
             fi
-            unset _tb _wrap _b
+
+            # TensorBoard's data server is another prebuilt ELF with the same
+            # loader problem; it takes its path from the environment.
+            _tbs=$(echo "$PWD"/.venv/lib/python*/site-packages/tensorboard_data_server/bin/server)
+            if [ -f "$_tbs" ] && [ -n "$NIX_LD" ]; then
+              _wrap="$PWD/.venv/nix-ld-bin"
+              mkdir -p "$_wrap"
+              printf '#!/bin/sh\nexec "%s" "%s" "$@"\n' "$NIX_LD" "$_tbs" \
+                > "$_wrap/tensorboard_data_server"
+              chmod +x "$_wrap/tensorboard_data_server"
+              export TENSORBOARD_DATA_SERVER_BINARY="$_wrap/tensorboard_data_server"
+            fi
+            unset _tb _tbs _wrap _b
           '';
         };
       });
