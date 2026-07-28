@@ -47,6 +47,11 @@
             export TRITON_CACHE_DIR="$_cache/balatroai/triton"
             mkdir -p "$TORCHINDUCTOR_CACHE_DIR" "$TRITON_CACHE_DIR"
 
+            # Rollout tensors and cuda-graph pools are long-lived while the
+            # per-minibatch activations churn; expandable segments keep that
+            # mix from fragmenting a 24 GB card into an OOM.
+            export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
             _tb=$(echo "$PWD"/.venv/lib/python*/site-packages/triton/backends/nvidia/bin)
             if [ -d "$_tb" ] && [ -n "$NIX_LD" ]; then
               _wrap="$PWD/.venv/nix-ld-bin"

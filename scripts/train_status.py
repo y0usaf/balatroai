@@ -17,6 +17,7 @@ from pathlib import Path
 
 STEP_RE = re.compile(
     r"step\s+([\d,]+)\s+sps\s+([\d,]+)\s+c/u\s+([\d.]+)/([\d.]+)s"
+    r"(?:\s+gpu\s+([\d.]+)G)?"
     r"(?:\s+ante\s+([\d.]+)\s+\(max\s+(\d+)\)\s+win\s+([\d.]+)%)?"
 )
 
@@ -32,9 +33,10 @@ def parse(log: Path) -> list[dict]:
             "sps": int(m.group(2).replace(",", "")),
             "collect": float(m.group(3)),
             "update": float(m.group(4)),
-            "ante": float(m.group(5)) if m.group(5) else None,
-            "max_ante": int(m.group(6)) if m.group(6) else None,
-            "win": float(m.group(7)) if m.group(7) else None,
+            "gpu": float(m.group(5)) if m.group(5) else None,
+            "ante": float(m.group(6)) if m.group(6) else None,
+            "max_ante": int(m.group(7)) if m.group(7) else None,
+            "win": float(m.group(8)) if m.group(8) else None,
         })
     return rows
 
@@ -63,7 +65,8 @@ def report(run_dir: Path, log_name: str, window: int) -> None:
 
     print(f"run        {run_dir}")
     print(f"step       {last['step']:,}   ({sps:,.0f} steps/s over last {len(recent)} iters)")
-    print(f"collect/upd{last['collect']:>6.1f}s /{last['update']:>5.1f}s")
+    print(f"collect/upd{last['collect']:>6.1f}s /{last['update']:>5.1f}s"
+          + (f"   gpu peak {last['gpu']:.1f} GB" if last["gpu"] else ""))
     if ante_now is not None:
         trend = "" if ante_prev is None else f"  (was {ante_prev:.2f})"
         print(f"mean ante  {ante_now:.2f}{trend}   best seen "

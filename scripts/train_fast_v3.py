@@ -233,6 +233,11 @@ def main() -> None:
     # action dim keeps shapes static enough for the compiled variants to stay
     # cached. Rollout and update get separate handles: graph capture is only
     # safe for the inference-mode rollout, the update keeps a normal compile.
+    # Rollout and update each specialize on ~7 action-width buckets, and dynamo
+    # caches per code object, so the two paths together blow past the default
+    # limit of 8 and recompile on every call (update time doubled before this).
+    torch._dynamo.config.cache_size_limit = 64
+    torch._dynamo.config.accumulated_cache_size_limit = 256
     if args.compile == "cudagraph":
         policy_roll = torch.compile(policy, dynamic=False, mode="reduce-overhead")
         policy_upd = torch.compile(policy, dynamic=False)
@@ -347,9 +352,16 @@ def main() -> None:
         pg_l = vf_l = ent_l = kl = 0.0
         n_upd = 0
         for _ in range(args.epochs):
-            perm = torch.randperm(batch, device=device)
-            for s in range(0, n_mb * mb_size, mb_size):
-                mb = perm[s : s + mb_size]
+            # Minibatches are padded to the widest action table they contain,
+            # so a uniform shuffle makes every one of them run at the global
+            # max (~768) and the (B, A, d) activations dominate GPU memory.
+            # Sorting by table width first keeps most minibatches narrow; the
+            # random tie-break still reshuffles within a width each epoch.
+            noise = torch.rand(batch, device=device)
+            order = torch.argsort(b_nact.float() + noise)
+            chunk_order = torch.randperm(n_mb, device=device).tolist()
+            for c in chunk_order:
+                mb = order[c * mb_size : (c + 1) * mb_size]
                 a_eff = bucket_actions(int(b_nact[mb].max()))
                 with torch.autocast("cuda", torch.bfloat16):
                     logits, v = policy_upd(b_obs[mb], b_acts[mb, :a_eff])
@@ -383,6 +395,8 @@ def main() -> None:
         writer.add_scalar("perf/sps", sps, global_step)
         writer.add_scalar("perf/collect_s", t_collect, global_step)
         writer.add_scalar("perf/update_s", t_iter - t_collect, global_step)
+        writer.add_scalar("perf/gpu_peak_gb",
+                          torch.cuda.max_memory_allocated() / 2**30, global_step)
         writer.add_scalar("loss/policy", pg_l / n_upd, global_step)
         writer.add_scalar("loss/value", vf_l / n_upd, global_step)
         writer.add_scalar("loss/entropy", ent_l / n_upd, global_step)
@@ -390,7 +404,8 @@ def main() -> None:
         writer.add_scalar("hp/lr", lr_now, global_step)
         writer.add_scalar("hp/ent_coef", ent_now, global_step)
         line = (f"step {global_step:>12,}  sps {sps:>6,}  "
-                f"c/u {t_collect:.1f}/{t_iter - t_collect:.1f}s")
+                f"c/u {t_collect:.1f}/{t_iter - t_collect:.1f}s  "
+                f"gpu {torch.cuda.max_memory_allocated() / 2**30:.1f}G")
         if ep_antes:
             writer.add_scalar("balatro/mean_ante", np.mean(ep_antes), global_step)
             writer.add_scalar("balatro/max_ante", np.max(ep_antes), global_step)
