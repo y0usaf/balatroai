@@ -122,6 +122,13 @@ class PointerPolicy(nn.Module):
         self.center_emb = (
             nn.Embedding(NUM_CENTER_KEYS + 1, d_model) if center_emb else None
         )
+        if self.center_emb is not None:
+            # nn.Embedding defaults to N(0, 1), which is ~4x the scale of the
+            # entity_proj output it is added to: every joker token would start
+            # buried under a random vector, and ids that are rarely drawn would
+            # keep theirs. Ablation measured that cost as 1.70 -> 1.27 mean
+            # ante. Start near zero and let the net earn the separation.
+            nn.init.normal_(self.center_emb.weight, mean=0.0, std=0.02)
         layer = nn.TransformerEncoderLayer(
             d_model=d_model, nhead=n_heads, dim_feedforward=4 * d_model,
             batch_first=True, norm_first=True, dropout=0.0,

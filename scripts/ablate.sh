@@ -74,3 +74,11 @@ spe = per_iter / max(sum(r[3] for r in last) / len(last), 1)
 print(f"{name:<16} {ante:>6.2f} @ {rows[-1][0]:>10,}      {spe:>6.1f}        {sps:>6,.0f}")
 PY
 done
+
+# --- follow-ups, added after the first round ---
+# F: embeddings again, now initialized at 0.02 instead of N(0,1).
+run emb_shape_fixinit --d-model 128 --n-heads 4 --n-layers 2 --shaping-coef 1.0
+
+# G: the larger net WITHOUT curriculum -- the first round only ever tested it
+# with curriculum, so capacity was never isolated from the change that hurt.
+run big_shape         --d-model 256 --n-heads 8 --n-layers 3 --shaping-coef 1.0
