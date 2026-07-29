@@ -43,12 +43,25 @@ def worker_proc(
     max_steps: int,
     gamma: float,
     shaping_coef: float,
+    n_workers: int,
+    curriculum_pool: str | None,
+    curriculum_frac: float,
 ) -> None:
+    import random as _random
+
     from jackdaw.env.game_interface import DirectAdapter
     from jackdaw.env.gymnasium_wrapper import MAX_ACTIONS, BalatroGymnasiumEnv
 
     from policy_v3 import OBS_DIM, encode_action_table, flatten_obs
     from shaping import PotentialShaper
+
+    # Each worker keeps only its shard, so the pool costs one copy in total
+    # rather than one per worker.
+    pool = []
+    if curriculum_pool and curriculum_frac > 0:
+        from curriculum import UnusableSnapshot, inject, load_pool
+        pool = load_pool(curriculum_pool, shard=rank, n_shards=n_workers)
+    cur_rng = _random.Random(1234 + rank)
 
     shms = {n: shared_memory.SharedMemory(name=s) for n, s in shm_names.items()}
     obs_buf = np.ndarray((n_total, OBS_DIM), dtype=np.float32, buffer=shms["obs"].buf)
@@ -62,6 +75,24 @@ def worker_proc(
     lo = rank * k
     envs = []
     shapers = []
+    was_injected = [False] * k
+
+    def start_episode(env, i: int):
+        """Begin an episode, sometimes from a recorded mid-game position."""
+        obs = None
+        if pool and cur_rng.random() < curriculum_frac:
+            try:
+                obs, _ = inject(env, cur_rng.choice(pool), cur_rng)
+                was_injected[i] = True
+            except UnusableSnapshot:
+                obs = None
+        if obs is None:
+            obs, _ = env.reset()
+            was_injected[i] = False
+        if shaping_coef:
+            shapers[i].reset(env._inner._adapter.raw_state)
+        return obs
+
     for i in range(k):
         env = BalatroGymnasiumEnv(
             adapter_factory=DirectAdapter,
@@ -69,15 +100,12 @@ def worker_proc(
             seed_prefix=f"P{rank}_{i}",
             reward_shaping=True,
         )
-        obs, _ = env.reset()
+        envs.append(env)
+        shapers.append(PotentialShaper(gamma, shaping_coef))
+        obs = start_episode(env, i)
         obs_buf[lo + i] = flatten_obs(obs)
         nact_buf[lo + i] = len(env._action_table)
         encode_action_table(env._action_table, acts_buf[lo + i])
-        envs.append(env)
-        shaper = PotentialShaper(gamma, shaping_coef)
-        if shaping_coef:
-            shaper.reset(env._inner._adapter.raw_state)
-        shapers.append(shaper)
     obs_ev.set()
 
     while True:
@@ -94,16 +122,17 @@ def worker_proc(
                 r += shapers[i].step(
                     None if done else env._inner._adapter.raw_state, done)
             if done:
+                # Injected episodes are reported separately: they start past
+                # ante 1, so mixing them into the headline would inflate it.
                 stats_q.put(
                     (
                         info.get("balatro/ante_reached", 1),
                         info.get("balatro/rounds_beaten", 0),
                         bool(info.get("balatro/won", False)),
+                        was_injected[i],
                     )
                 )
-                obs, _ = env.reset()
-                if shaping_coef:
-                    shapers[i].reset(env._inner._adapter.raw_state)
+                obs = start_episode(env, i)
             obs_buf[gi] = flatten_obs(obs)
             nact_buf[gi] = len(env._action_table)
             encode_action_table(env._action_table, acts_buf[gi])
@@ -148,6 +177,13 @@ def main() -> None:
                         help="linearly anneal --ent-coef to this by the end")
     parser.add_argument("--lr-final", type=float, default=None,
                         help="linearly anneal --lr to this by the end")
+    parser.add_argument("--curriculum-pool", type=str, default=None,
+                        help="pickle of mid-game states from "
+                             "scripts/gen_curriculum.py")
+    parser.add_argument("--curriculum-frac", type=float, default=0.0,
+                        help="fraction of episodes restarted from the pool; "
+                             "the rest start fresh at ante 1, and the two are "
+                             "reported separately")
     parser.add_argument("--compile", choices=("none", "default", "cudagraph"),
                         default="none",
                         help="torch.compile the policy (bucketed action dim); "
@@ -211,7 +247,8 @@ def main() -> None:
             target=worker_proc,
             args=(w, args.envs_per_worker, n_env, shm_names,
                   act_evs[w], obs_evs[w], stats_q, args.max_steps,
-                  args.gamma, args.shaping_coef),
+                  args.gamma, args.shaping_coef, args.workers,
+                  args.curriculum_pool, args.curriculum_frac),
             daemon=True,
         )
         p.start()
@@ -282,9 +319,13 @@ def main() -> None:
     last_acts = torch.as_tensor(acts_buf.copy(), device=device)
     last_n = torch.as_tensor(nact_buf.astype(np.int64), device=device)
 
+    # Fresh-start episodes are the real objective; injected ones begin past
+    # ante 1 and are tracked only to see whether the curriculum is being used
+    # and whether skill there transfers back to fresh games.
     ep_antes: list[int] = []
     ep_rounds: list[int] = []
     ep_wins: list[bool] = []
+    inj_antes: list[int] = []
     next_ckpt = (global_step // args.checkpoint_every + 1) * args.checkpoint_every
     print(f"{args.workers} workers x {args.envs_per_worker} envs = {n_env} envs, "
           f"{args.groups} groups, rollout {T} ({T * n_env:,} steps/iter), "
@@ -412,8 +453,11 @@ def main() -> None:
                 n_upd += 1
 
         while not stats_q.empty():
-            a_, r_, won = stats_q.get_nowait()
-            ep_antes.append(a_); ep_rounds.append(r_); ep_wins.append(won)
+            a_, r_, won, injected = stats_q.get_nowait()
+            if injected:
+                inj_antes.append(a_)
+            else:
+                ep_antes.append(a_); ep_rounds.append(r_); ep_wins.append(won)
         t_iter = time.time() - t_start
         sps = int(T * n_env / t_iter)
         writer.add_scalar("perf/sps", sps, global_step)
@@ -439,6 +483,11 @@ def main() -> None:
                      f"  win {100 * np.mean(ep_wins):.1f}%"
                      f"  eps {len(ep_antes)}")
             ep_antes.clear(); ep_rounds.clear(); ep_wins.clear()
+        if inj_antes:
+            writer.add_scalar("balatro/mean_ante_injected",
+                              np.mean(inj_antes), global_step)
+            line += f"  [inj {np.mean(inj_antes):.2f} x{len(inj_antes)}]"
+            inj_antes.clear()
         print(line, flush=True)
 
         if global_step >= next_ckpt:
