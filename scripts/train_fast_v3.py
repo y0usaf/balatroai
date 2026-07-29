@@ -170,6 +170,9 @@ def main() -> None:
     parser.add_argument("--checkpoint-every", type=int, default=2_000_000)
     parser.add_argument("--resume", type=str, default=None)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--no-center-emb", action="store_true",
+                        help="disable joker/shop identity embeddings "
+                             "(reproduces the pre-embedding baseline)")
     parser.add_argument("--d-model", type=int, default=128)
     parser.add_argument("--n-heads", type=int, default=4)
     parser.add_argument("--n-layers", type=int, default=2)
@@ -265,7 +268,7 @@ def main() -> None:
     group_idx = [torch.as_tensor(i, device=device) for i in group_idx_np]
 
     net_cfg = {"d_model": args.d_model, "n_heads": args.n_heads,
-               "n_layers": args.n_layers}
+               "n_layers": args.n_layers, "center_emb": not args.no_center_emb}
     policy = PointerPolicy(**net_cfg).to(device)
     n_params = sum(p.numel() for p in policy.parameters())
     opt = torch.optim.Adam(policy.parameters(), lr=args.lr, eps=1e-5, fused=True)

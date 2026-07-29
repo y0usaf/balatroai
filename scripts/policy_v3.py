@@ -104,6 +104,7 @@ class PointerPolicy(nn.Module):
         d_model: int = 128,
         n_heads: int = 4,
         n_layers: int = 2,
+        center_emb: bool = True,
     ) -> None:
         super().__init__()
         self.d = d_model
@@ -117,7 +118,10 @@ class PointerPolicy(nn.Module):
         # Shared across joker/consumable/shop_item: the same center key means
         # the same object whether it sits in the shop or in your joker slots,
         # and ent_type_emb already tells the net which of the two it is.
-        self.center_emb = nn.Embedding(NUM_CENTER_KEYS + 1, d_model)
+        # Switchable so ablations can reproduce the pre-embedding baseline.
+        self.center_emb = (
+            nn.Embedding(NUM_CENTER_KEYS + 1, d_model) if center_emb else None
+        )
         layer = nn.TransformerEncoderLayer(
             d_model=d_model, nhead=n_heads, dim_feedforward=4 * d_model,
             batch_first=True, norm_first=True, dropout=0.0,
@@ -153,7 +157,7 @@ class PointerPolicy(nn.Module):
         valid = [torch.ones(batch, 1, dtype=torch.bool, device=device)]
         for i, (name, max_count, _) in enumerate(ENTITIES):
             emb = self.entity_proj[name](obs[name]) + self.ent_type_emb.weight[i]
-            if name in _KEYED_ENTITIES:
+            if self.center_emb is not None and name in _KEYED_ENTITIES:
                 # Feature 0 is center_key_id / NUM_CENTER_KEYS; invert it.
                 # Empty slots decode to id 0, which the padding mask drops.
                 ids = (obs[name][..., 0] * NUM_CENTER_KEYS).round().long()
