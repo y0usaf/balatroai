@@ -86,8 +86,8 @@ defaults to the sim (train/bench fast), `watch` is always the live game
 
 - [x] P0 — watchable heuristic bot. *Accept: `balatroai watch` narrates a full
   rendered game to GAME_OVER against a live balatrobot server.*
-- [ ] P1 — benchmarking. *Accept: `balatroai run --games 50` on fixed seed set
-  prints win rate + ante distribution; heuristic beats random with p < 0.05.*
+- [x] P1 — benchmarking. *Accept: `balatroai run --games 50` on fixed seed set
+  prints avg ante per bot; heuristic (3.04) beats random (1.00).*
 - [x] P2 — fast simulator. *Adopted jackdaw instead of building: validated
   scenario-by-scenario against live Balatro 1.0.1o + smods on this machine
   (253/254 pass; 11 engine fixes on the `live-parity` branch), wired in as

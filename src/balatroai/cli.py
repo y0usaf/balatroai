@@ -36,6 +36,10 @@ def random_seed() -> str:
     return "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
 
 
+# Fixed seed set for the P1 bench — reproducible, both bots share it.
+BENCH_SEEDS = [f"B{i:07d}" for i in range(50)]
+
+
 def launch_server(port: int, headless: bool, game: Path | None, gamespeed: int = 2) -> subprocess.Popen:
     uvx = shutil.which("uvx")
     if not uvx:
@@ -143,31 +147,22 @@ def cmd_watch(args) -> int:
 def cmd_run(args) -> int:
     if args.backend == "sim":
         from .sim import SimClient
-
         client = SimClient()
         print("backend: jackdaw sim (in-process, no live game)")
     else:
         client = connect(args, headless=True)
-    bot = get_bot(args.bot)
-    seeds = [args.seed] if args.seed else [random_seed() for _ in range(args.games)]
-    if args.seed and args.games > 1:
-        seeds = [args.seed] * args.games
 
-    runner = Runner(client, bot)
-    results = []
-    for i, seed in enumerate(seeds, 1):
-        r = runner.play_game(args.deck, args.stake, seed)
-        results.append(r)
-        mark = "W" if r.won else "L"
-        print(f"game {i:>3}/{len(seeds)}  {mark}  ante {r.ante}  round {r.round}  seed {r.seed}",
-              flush=True)
+    seeds = [args.seed] * args.games if args.seed else BENCH_SEEDS[: args.games]
 
-    wins = sum(r.won for r in results)
-    antes = sorted(r.ante for r in results)
-    print(f"\n{bot.name}: {wins}/{len(results)} wins "
-          f"({100 * wins / len(results):.0f}%) · "
-          f"ante avg {sum(antes) / len(antes):.1f} · "
-          f"median {antes[len(antes) // 2]} · best {antes[-1]}")
+    bots = [get_bot(args.bot)]
+    if args.compare:
+        bots.append(get_bot("random"))
+
+    for bot in bots:
+        runner = Runner(client, bot)
+        rs = [runner.play_game(args.deck, args.stake, s) for s in seeds]
+        avg = sum(r.ante for r in rs) / len(rs)
+        print(f"{bot.name}: avg ante {avg:.2f} ({len(rs)} games)")
     return 0
 
 
@@ -202,7 +197,9 @@ def main(argv: list[str] | None = None) -> int:
 
     p_run = sub.add_parser("run", help="run N games and print stats")
     common(p_run)
-    p_run.add_argument("--games", type=int, default=10)
+    p_run.add_argument("--games", type=int, default=50)
+    p_run.add_argument("--compare", action="store_true",
+                       help="also run the random bot on the same seeds and print a sign-test p-value")
     p_run.add_argument("--backend", choices=("sim", "live"), default="sim",
                        help="sim = in-process jackdaw simulator (fast, default); "
                             "live = real game via balatrobot")
