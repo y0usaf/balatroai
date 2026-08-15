@@ -42,6 +42,14 @@ class SimClient:
         except self._rpc_error as e:
             raise RPCError("SIM", str(e)) from e
 
+    def last_score(self):
+        """Per-hand score + per-joker contribution of the last hand (sim-only).
+
+        Training-only channel for reward shaping; not part of the RPC surface.
+        Returns None if no hand has been scored yet.
+        """
+        return self._backend.last_score_result()
+
     # -- parity with Client's readiness API (the sim is always ready) --
 
     def ready(self) -> bool:
