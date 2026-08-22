@@ -104,8 +104,12 @@ def kill_prefix(game: Path) -> None:
     for d in sorted(common.iterdir()):
         ws = d / "files/bin/wineserver"
         if "proton" in d.name.lower() and ws.is_file():
+            # NixOS has no /lib64: exec'ing Steam's wineserver directly fails
+            # ENOENT (missing ELF interpreter) — the same FHS gap that
+            # _steam_run_wrapper bridges for the game itself.
+            argv = ["steam-run", str(ws)] if shutil.which("steam-run") else [str(ws)]
             subprocess.run(
-                [str(ws), "-k"],
+                [*argv, "-k"],
                 env={**os.environ, "WINEPREFIX": str(game / "compatdata/pfx")},
                 capture_output=True,
                 timeout=15,
@@ -113,12 +117,14 @@ def kill_prefix(game: Path) -> None:
             return
 
 
-# (old, new) pairs applied to balatrobot's settings.lua in the isolated copy.
+# (file under balatrobot's src/lua/, old, new) triples applied to the mod
+# copy in the isolated game dir before every launch. Idempotent.
 # Rendered mode should behave like vanilla-under-Steam: real dt (wall-clock
 # smooth at any fps) and vsync (frames paced to the display, not a busy loop).
-# Headless keeps upstream behavior: pinned fast dt, vsync off. Idempotent.
-_BALATROBOT_PATCHES = [
+# Headless keeps upstream behavior: pinned fast dt, vsync off.
+_BALATROBOT_PATCHES: list[tuple[str, str, str]] = [
     (
+        "settings.lua",
         """love.update = function(_)
     love_update(dt)
   end""",
@@ -129,6 +135,7 @@ _BALATROBOT_PATCHES = [
   end""",
     ),
     (
+        "settings.lua",
         """  love.window.setVSync(0)
   G.SETTINGS.WINDOW = G.SETTINGS.WINDOW or {}
   G.SETTINGS.WINDOW.vsync = 0""",
@@ -139,19 +146,43 @@ _BALATROBOT_PATCHES = [
   G.SETTINGS.WINDOW = G.SETTINGS.WINDOW or {}
   G.SETTINGS.WINDOW.vsync = vsync""",
     ),
+    (
+        "endpoints/buy.lua",
+        """    local btn
+    if args.card then
+      btn = G.shop_jokers.cards[pos].children.buy_button.definition
+    elseif args.voucher then
+      btn = G.shop_vouchers.cards[pos].children.buy_button.definition
+    elseif args.pack then
+      btn = G.shop_booster.cards[pos].children.buy_button.definition
+    end""",
+        """    local btn
+    do
+      -- balatroai: children.buy_button is briefly absent while a reroll
+      -- refills the shop card; index safely so an early buy returns a clean
+      -- NOT_ALLOWED error instead of crashing the endpoint.
+      local group = (args.card and G.shop_jokers)
+        or (args.voucher and G.shop_vouchers)
+        or G.shop_booster
+      local sc = group and group.cards and group.cards[pos]
+      btn = sc and sc.children and sc.children.buy_button
+        and sc.children.buy_button.definition or nil
+    end""",
+    ),
 ]
 
 
 def patch_balatrobot(game: Path) -> None:
-    """Apply balatroai's rendered-mode patches to the balatrobot mod copy."""
-    path = game / "compatdata" / MODS_REL / "balatrobot/src/lua/settings.lua"
-    if not path.is_file():
-        return
-    text = path.read_text()
-    for old, new in _BALATROBOT_PATCHES:
-        if old in text:
-            text = text.replace(old, new)
-    path.write_text(text)
+    """Apply balatroai's patches to the balatrobot mod copy."""
+    base = game / "compatdata" / MODS_REL / "balatrobot/src/lua"
+    for rel, old, new in _BALATROBOT_PATCHES:
+        path = base / rel
+        if not path.is_file():
+            continue
+        text = path.read_text()
+        patched = text.replace(old, new)
+        if patched != text:
+            path.write_text(patched)
 
 
 def _window_patch_toml(w: int, h: int) -> str:
