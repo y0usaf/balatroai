@@ -44,11 +44,55 @@ def is_set_up(game: Path) -> bool:
     return (game / "Balatro/Balatro.exe").is_file() and (game / "compatdata" / MODS_REL / "balatrobot/balatrobot.lua").is_file()
 
 
+def _detect_proton() -> Path:
+    """Proton script matching the Steam prefix (read from compatdata config_info).
+
+    balatrobot's own detection picks the alphabetically-first Proton, which is
+    often NOT the one the prefix was built with — a mismatch makes Proton
+    downgrade/recreate the prefix.  The prefix's config_info records the exact
+    Proton Steam used.
+    """
+    config = steam_root() / f"steamapps/compatdata/{APP_ID}/config_info"
+    if config.is_file():
+        for line in config.read_text().splitlines():
+            if "/files/" in line and "proton" in line.lower():
+                root = line.split("/files/")[0]
+                proton = Path(root) / "proton"
+                if proton.is_file():
+                    return proton
+    # fallback: first proton in common/
+    common = steam_root() / "steamapps/common"
+    for d in sorted(common.iterdir()):
+        p = d / "proton"
+        if p.is_file() and "proton" in d.name.lower():
+            return p
+    sys.exit("Proton not found")
+
+
+def _steam_run_wrapper(game: Path) -> Path:
+    """steam-run wrapper around Proton, so the game gets an FHS env on NixOS.
+
+    NixOS has no /lib64, so the game's ELF interpreter
+    (/lib64/ld-linux-x86-64.so.2) is missing and Proton dies with
+    "could not open".  steam-run provides the FHS.  balatrobot runs this
+    wrapper as its Proton via BALATROBOT_LOVE_PATH.
+    """
+    wrapper = game / "steam-run-proton"
+    proton = _detect_proton()
+    if shutil.which("steam-run"):
+        wrapper.write_text(f"#!/bin/sh\nexec steam-run \"{proton}\" \"$@\"\n")
+    else:  # non-NixOS: Proton already has a real /lib64
+        wrapper.write_text(f"#!/bin/sh\nexec \"{proton}\" \"$@\"\n")
+    wrapper.chmod(0o755)
+    return wrapper
+
+
 def launch_env(game: Path) -> dict[str, str]:
     """Env overrides that point balatrobot serve at the isolated copy."""
     return {
         "BALATROBOT_BALATRO_PATH": str(game / "Balatro"),
         "STEAM_COMPAT_DATA_PATH": str(game / "compatdata"),
+        "BALATROBOT_LOVE_PATH": str(_steam_run_wrapper(game)),
     }
 
 
