@@ -213,8 +213,7 @@ class BalatroEnv(_EnvBase):
             except RPCError:
                 self.state = self.client.call("gamestate")
         last_score = self.client.last_score()
-        r = reward(prev_state, self.state, last_score)
-        terminated = bool(self.state.get("state") == "GAME_OVER")
+        r = reward(prev_state, self.state, last_score, act)
         truncated = bool(self._step_count >= self.max_steps)
         self._step_count += 1
         info = {"state": self.state, "last_score": last_score,

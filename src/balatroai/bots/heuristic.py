@@ -14,6 +14,23 @@ WEAK_HANDS = {"High Card", "Pair", "Two Pair"}
 WEAK_JOKERS = {"j_joker"}
 
 
+# Boss blinds constraining how many cards a played hand may contain,
+# keyed by blind name as reported in the gamestate (lowercased).
+_MIN_CARDS_BY_BOSS = {"the psychic": 5}
+_MAX_CARDS_BY_BOSS: dict[str, int] = {}  # none in vanilla
+_RANK_ORDER = "23456789TJQKA"
+
+
+def boss_card_limits(state: dict) -> tuple[int, int]:
+    """(min, max) cards a played hand may have under the CURRENT blind."""
+    blind = current_blind(state)
+    if not blind:
+        return 0, 5
+    name = str(blind.get("name", "")).lower()
+    return (_MIN_CARDS_BY_BOSS.get(name, 0),
+            min(_MAX_CARDS_BY_BOSS.get(name, 5), 5))
+
+
 def current_blind(state: dict) -> dict | None:
     for blind in (state.get("blinds") or {}).values():
         if isinstance(blind, dict) and blind.get("status") == "CURRENT":
@@ -50,12 +67,13 @@ class HeuristicBot:
             case _:
                 return Action("gamestate", note="wait")
 
-    # -- playing ----------------------------------------------------------
     def _hand(self, state: dict) -> Action:
         cards = state.get("hand", {}).get("cards", [])
         choice = poker.best_play(cards, state.get("hands"))
         if choice is None:
-            return Action("play", {"cards": [0]}, note="play first (no ranked cards)")
+            idx = self._pad(cards, [0] if cards else [], 1)
+            return Action("play", {"cards": idx},
+                          note="play first (no ranked cards)")
 
         rnd = state.get("round", {})
         hands_left = rnd.get("hands_left", 1)
@@ -65,20 +83,51 @@ class HeuristicBot:
         if blind:
             needed = max(0, blind.get("score", 0) - rnd.get("chips", 0))
 
+        # Boss card-count constraints, plus Splash: it pays +4 mult for
+        # every played card whether scored or not, so pad to a full hand.
+        lo, hi = boss_card_limits(state)
+        want = max(lo, 5 if self._splash_owned(state) else 0)
+        idx = list(choice.indices)
+        fillers = 0
+        if len(idx) < want:
+            padded = self._pad(cards, idx, min(want, hi))
+            fillers = len(padded) - len(idx)
+            idx = padded
+
         label = f"{choice.name} ~{choice.score}"
+        if fillers:
+            label += f" +{fillers}"
         if needed is not None and choice.score >= needed:
-            return Action("play", {"cards": choice.indices}, note=f"play {label} (seals it)")
+            return Action("play", {"cards": idx}, note=f"play {label} (seals it)")
 
         weak = choice.name in WEAK_HANDS
         behind = needed is not None and hands_left > 0 and choice.score * hands_left < needed
-        if discards_left > 0 and weak and (behind or needed is None):
+        if discards_left > 0 and weak and (behind or needed is None) and not fillers:
             keep = poker.keep_set(cards)
             toss = poker.discard_candidates(cards, keep)
             if toss:
                 return Action("discard", {"cards": toss}, note=f"fish: toss {len(toss)}")
-        return Action("play", {"cards": choice.indices}, note=f"play {label}")
+        return Action("play", {"cards": idx}, note=f"play {label}")
 
-    # -- shopping ---------------------------------------------------------
+    @staticmethod
+    def _splash_owned(state: dict) -> bool:
+        return any(j.get("key") == "j_splash"
+                   for j in (state.get("jokers") or {}).get("cards", []))
+
+    @staticmethod
+    def _pad(cards: list[dict], indices: list[int], target: int) -> list[int]:
+        """Extend a played-hand index list with the strongest unused cards."""
+        used = set(indices)
+        rest = sorted(
+            (i for i in range(len(cards)) if i not in used),
+            key=lambda i: _RANK_ORDER.index(
+                ((cards[i].get("value") or {}).get("rank") or "2")[0]),
+            reverse=True,
+        )
+        out = list(indices)
+        while len(out) < target and rest:
+            out.append(rest.pop(0))
+        return out
     def _shop(self, state: dict) -> Action:
         money = state.get("money", 0)
         ante = state.get("ante_num", 1)
