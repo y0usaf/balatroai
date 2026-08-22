@@ -171,7 +171,9 @@ def cmd_watch(args) -> int:
 
 def cmd_train(args) -> int:
     from .rl.train import train
-    train(workers=args.workers, timesteps=args.timesteps, checkpoint=args.checkpoint)
+    train(workers=args.workers, timesteps=args.timesteps,
+          checkpoint=args.checkpoint, eval_freq=args.eval_freq,
+          n_eval_games=args.eval_games)
     return 0
 
 
@@ -245,6 +247,10 @@ def main(argv: list[str] | None = None) -> int:
                          help="total timesteps to train (default: 100000)")
     p_train.add_argument("--checkpoint", default="checkpoint",
                          help="path to save the trained model (default: checkpoint)")
+    p_train.add_argument("--eval-freq", type=int, default=5000,
+                         help="steps between eval runs (default: 5000)")
+    p_train.add_argument("--eval-games", type=int, default=20,
+                         help="games per eval run (default: 20)")
     p_train.set_defaults(func=cmd_train)
 
     args = parser.parse_args(argv)

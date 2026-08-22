@@ -3,7 +3,7 @@ stdlib-only core stays intact."""
 from __future__ import annotations
 
 from collections import Counter
-
+from pathlib import Path
 
 SUITS = {"H": "♥", "D": "♦", "C": "♣", "S": "♠"}
 
@@ -111,8 +111,18 @@ def train(workers: int = 4, timesteps: int = 100_000, checkpoint: str = "checkpo
             env.save(checkpoint + "_latest_vecnormalize.pkl")
             return True
 
-    # MlpPolicy PPO trains faster on CPU than on GPU (sb3#1245).
-    model = MaskablePPO("MlpPolicy", env, verbose=1, device="cpu")
+    # Resume when a checkpoint exists: reload model + obs/reward stats and
+    # keep learning up to the absolute timestep target.  This is what makes
+    # supervisor restarts cheap — a crashed overnight run continues, not
+    # restarts.  SB3's learn() treats total_timesteps as absolute.
+    ckpt_zip = Path(checkpoint + ".zip")
+    if ckpt_zip.is_file():
+        env = VecNormalize.load(checkpoint + "_vecnormalize.pkl", env)
+        model = load_model(checkpoint, env=env, device="cpu")
+        print(f"resuming {checkpoint} at step {model.num_timesteps}")
+    else:
+        # MlpPolicy PPO trains faster on CPU than on GPU (sb3#1245).
+        model = MaskablePPO("MlpPolicy", env, verbose=1, device="cpu")
     model.learn(total_timesteps=timesteps, callback=EvalAndLogCallback())
     model.save(checkpoint)
     env.save(checkpoint + "_vecnormalize.pkl")
