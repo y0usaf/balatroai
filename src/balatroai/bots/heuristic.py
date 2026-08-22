@@ -10,6 +10,9 @@ from . import Action, register
 
 WEAK_HANDS = {"High Card", "Pair", "Two Pair"}
 
+# Jokers worth selling: objectively weak (+4 mult) or money-draining/expiring.
+WEAK_JOKERS = {"j_joker"}
+
 
 def current_blind(state: dict) -> dict | None:
     for blind in (state.get("blinds") or {}).values():
@@ -99,6 +102,26 @@ class HeuristicBot:
             if c.get("set") == "PLANET":
                 return Action("buy", {"card": i}, note=f"buy {c.get('label')} (${cost})")
         return Action("next_round", note="leave shop")
+
+    # -- selling / rerolling ---------------------------------------------
+    def _sell(self, state: dict) -> Action | None:
+        """Sell the weakest held joker (rental/perishable/known-weak), else None."""
+        jokers = state.get("jokers", {})
+        for i, j in enumerate(jokers.get("cards", [])):
+            mod = j.get("modifier", {}) or {}
+            if mod.get("rental") or mod.get("perishable") or j.get("key") in WEAK_JOKERS:
+                return Action("sell", {"joker": i}, note=f"sell {j.get('label')}")
+        return None
+
+    def _reroll(self, state: dict) -> Action | None:
+        """Reroll the shop if we can afford it above reserve, else None."""
+        money = state.get("money", 0)
+        ante = state.get("ante_num", 1)
+        reserve = self.reserve if ante >= self.reserve_from_ante else 0
+        reroll_cost = state.get("round", {}).get("reroll_cost", 5)
+        if money - reroll_cost >= reserve:
+            return Action("reroll", note=f"reroll (${reroll_cost})")
+        return None
 
     # -- packs ------------------------------------------------------------
     def _pack(self, state: dict) -> Action:

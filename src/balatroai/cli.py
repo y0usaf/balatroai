@@ -134,7 +134,11 @@ def watch_emit(state: dict, action: Action, error: str | None) -> None:
 
 def cmd_watch(args) -> int:
     client = connect(args, headless=False)
-    bot = get_bot(args.bot)
+    if args.checkpoint:
+        from .rl.policy_bot import PolicyBot
+        bot = PolicyBot(args.checkpoint)
+    else:
+        bot = get_bot(args.bot)
     seed = args.seed or random_seed()
     print(f"bot={bot.name} deck={args.deck} stake={args.stake} seed={seed}\n")
     result = Runner(client, bot, emit=watch_emit).play_game(args.deck, args.stake, seed)
@@ -142,6 +146,12 @@ def cmd_watch(args) -> int:
     print(f"\n{verdict} — ante {result.ante}, round {result.round}, "
           f"seed {result.seed}, {result.steps} actions")
     return 0 if result.won else 1
+
+
+def cmd_train(args) -> int:
+    from .rl.train import train
+    train(workers=args.workers, timesteps=args.timesteps, checkpoint=args.checkpoint)
+    return 0
 
 
 def cmd_run(args) -> int:
@@ -181,6 +191,8 @@ def main(argv: list[str] | None = None) -> int:
                        help="rendered game speed multiplier (default: 2; headless always runs fast)")
         p.add_argument("--launch", action="store_true",
                        help="spawn `uvx balatrobot serve` and wait for it")
+        p.add_argument("--checkpoint", default=None,
+                       help="path to a trained RL checkpoint; when set, drive the game from the policy")
         p.add_argument("--game-dir", default=None,
                        help="isolated game copy (default: ~/.local/share/balatroai)")
 
@@ -204,6 +216,15 @@ def main(argv: list[str] | None = None) -> int:
                        help="sim = in-process jackdaw simulator (fast, default); "
                             "live = real game via balatrobot")
     p_run.set_defaults(func=cmd_run)
+
+    p_train = sub.add_parser("train", help="run PPO training over the Balatro sim")
+    p_train.add_argument("--workers", type=int, default=4,
+                         help="number of parallel env workers (default: 4)")
+    p_train.add_argument("--timesteps", type=int, default=100_000,
+                         help="total timesteps to train (default: 100000)")
+    p_train.add_argument("--checkpoint", default="checkpoint",
+                         help="path to save the trained model (default: checkpoint)")
+    p_train.set_defaults(func=cmd_train)
 
     args = parser.parse_args(argv)
     try:
