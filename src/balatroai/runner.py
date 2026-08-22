@@ -7,6 +7,7 @@ per-state fallbacks when an action is rejected, and enforces a step watchdog.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Callable
 
@@ -66,11 +67,14 @@ class Runner:
                 state = self.client.call(action.method, action.params)
                 strikes = 0
             except RPCError as e:
-                # Isolated failures are usually transient (e.g. buying while a
-                # reroll is refilling the shop UI): refresh the snapshot and
-                # let the bot replan instead of advancing past the phase.
-                # Third strike in a row falls back to the phase action, which
-                # always advances, so a persistently bad action can't loop.
+                # Isolated failures are usually transient — either the game is
+                # mid-animation (a cash-out still scoring while the snapshot
+                # already says SHOP, so even vanilla can_use_consumeable()
+                # says "not yet") or a reroll is refilling the shop UI.
+                # Give it a beat, refresh the snapshot, and let the bot
+                # replan instead of advancing past the phase. Third strike in
+                # a row falls back to the phase action, which always advances,
+                # so a persistently bad action can't loop.
                 error = str(e)
                 strikes += 1
                 try:
@@ -78,6 +82,7 @@ class Runner:
                         fb = FALLBACKS.get(state.get("state", ""), Action("gamestate"))
                         state = self.client.call(fb.method, fb.params)
                     else:
+                        time.sleep(1.0)
                         state = self.client.call("gamestate")
                 except RPCError:
                     state = self.client.call("gamestate")
