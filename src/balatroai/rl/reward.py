@@ -1,40 +1,43 @@
 """Dense RL reward for balatroAI.
 
-Potential-shaped additive terms:
-  1. score_delta = capped chips progress toward the CURRENT blind / 1000.
-     Chips past the blind target earn nothing — overkill farming is dead
-     weight, and the cap makes "seal the blind cheaply" the optimal shape.
-     Shaping is gated on staying within one blind (ante_num + round_num):
-     across a transition the chip counter resets, and capping both sides
-     would read as a large negative.
-  2. per-joker: mult_added/10 + log(xmult_factor).  chips_added already
-     lands in score_delta; counting it twice biased toward chip jokers.
-  3. money_delta * 0.01 (a means, kept small).
-  4. ante bonus: ANTE_BONUS * new_ante on ante-up — later antes are
-     exponentially harder, so their milestone is worth more.
-  5. terminal: +WIN_BONUS on a win, -LOSS_PENALTY on a loss, no shaping
-     noise on the final step.
+Additive terms, each a pure function of (prev_state, state, last_score),
+composed by ``reward()``.  To tune or ablate, edit ``TERMS`` — flip a
+weight to 0, adjust a scale, add a Term.  No other file needs to change;
+the module stays stdlib-only and side-effect free.
 
-VecNormalize(norm_reward=True) absorbs the scale drift from the scaled
-ante bonus.
+Terms (weights chosen so milestones dominate per-step shaping and
+terminals dominate everything):
+
+  score   5.0  fraction of the CURRENT blind cleared this step.
+               Scale-invariant: clearing a 300-chip ante-1 blind counts
+               the same as clearing a 30k-chip ante-8 blind, unlike the
+               old absolute chips/1000 whose value drifted 100x across
+               antes.  Capped at the target (no overkill farming) and
+               gated to within-one-blind steps (the chip counter resets
+               across transitions).  Falls back to absolute/1000 when no
+               blind target is visible.
+  jokers  1.0  per-joker mult_added/10 + log(xmult_factor).  chips_added
+               already lands in score progress; counting it twice biased
+               toward chip jokers.
+  money   1.0  money_delta * 0.01 — a means, kept small.
+  ante    1.0  ANTE_BONUS * new_ante on ante-up — later antes are harder,
+               so their milestone is worth more.
+  terminal     +WIN_BONUS on a win, -LOSS_PENALTY on a loss; returned
+               alone, no shaping noise on the final step.
+
+VecNormalize(norm_reward=True) absorbs residual scale drift.
 """
 
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
+from dataclasses import dataclass
 
-SCALE_CHIPS = 1.0 / 1000.0
-SCALE_MULT = 0.1
-SCALE_MONEY = 0.01  # money is a means, keep it small so it doesn't dwarf score
 ANTE_BONUS = 5.0
 WIN_BONUS = 50.0
 LOSS_PENALTY = 20.0
-
-
-def _money(state: dict | None) -> float:
-    if not state:
-        return 0.0
-    return float(state.get("money", 0.0))
+SCALE_CHIPS = 1.0 / 1000.0  # legacy fallback when no blind target visible
 
 
 def _f(d: dict, key: str, default: float = 0.0) -> float:
@@ -51,7 +54,7 @@ def blind_target(state: dict | None) -> float:
 
 
 def _progress(state: dict | None) -> float:
-    """Chips that count toward the current blind (capped at its target)."""
+    """Chips banked toward the current blind, capped at its target."""
     if not state:
         return 0.0
     chips = float(state.get("round", {}).get("chips", 0.0))
@@ -59,34 +62,73 @@ def _progress(state: dict | None) -> float:
     return min(chips, target) if target > 0 else chips
 
 
-def _per_joker_term(last_score) -> float:
+def _same_blind(prev: dict | None, state: dict) -> bool:
+    return bool(prev) and (
+        prev.get("ante_num"), prev.get("round_num"),
+    ) == (state.get("ante_num"), state.get("round_num"))
+
+
+def _score_progress(prev: dict | None, state: dict, last_score) -> float:
+    if not _same_blind(prev, state):
+        return 0.0
+    target = blind_target(state)
+    if target <= 0:  # target invisible: legacy absolute shaping
+        p = float(state.get("round", {}).get("chips", 0.0)) if state else 0.0
+        q = float(prev.get("round", {}).get("chips", 0.0)) if prev else 0.0
+        return (p - q) * SCALE_CHIPS
+    return (_progress(state) - _progress(prev)) / target
+
+
+def _jokers(prev: dict | None, state: dict, last_score) -> float:
     per_joker = getattr(last_score, "per_joker", None) or {}
     total = 0.0
     for e in per_joker.values():
-        total += _f(e, "mult_added") * SCALE_MULT
+        total += _f(e, "mult_added") * 0.1
         total += math.log(max(1.0, _f(e, "xmult_factor", 1.0)))
     return total
+
+
+def _money(prev: dict | None, state: dict, last_score) -> float:
+    m = float(state.get("money", 0.0)) - (
+        float(prev.get("money", 0.0)) if prev else 0.0)
+    return m * 0.01
+
+
+def _ante(prev: dict | None, state: dict, last_score) -> float:
+    now = state.get("ante_num", 0)
+    was = prev.get("ante_num", 0) if prev else 0
+    return ANTE_BONUS * now if now > was else 0.0
+
+
+@dataclass(frozen=True)
+class Term:
+    name: str
+    weight: float
+    fn: Callable[[dict | None, dict, object], float]
+
+
+TERMS: tuple[Term, ...] = (
+    Term("score", 5.0, _score_progress),
+    Term("jokers", 1.0, _jokers),
+    Term("money", 1.0, _money),
+    Term("ante", 1.0, _ante),
+)
 
 
 def reward(prev_state: dict | None, state: dict, last_score) -> float:
     """Dense reward. last_score may be None (no hand yet); states optional."""
     if state.get("state") == "GAME_OVER":
         return WIN_BONUS if state.get("won") else -LOSS_PENALTY
+    return sum(t.weight * t.fn(prev_state, state, last_score) for t in TERMS)
 
-    money_delta = (_money(state) - _money(prev_state)) * SCALE_MONEY
-    joker_term = _per_joker_term(last_score)
 
-    prev_ante = prev_state.get("ante_num", 0) if prev_state else 0
-    ante_now = state.get("ante_num", 0)
-    ante_term = ANTE_BONUS * ante_now if ante_now > prev_ante else 0.0
-
-    same_blind = bool(prev_state) and (
-        prev_state.get("ante_num"), prev_state.get("round_num"),
-    ) == (state.get("ante_num"), state.get("round_num"))
-    score_delta = (_progress(state) - _progress(prev_state)) * SCALE_CHIPS \
-        if same_blind else 0.0
-
-    return score_delta + money_delta + joker_term + ante_term
+def reward_breakdown(prev_state: dict | None, state: dict,
+                     last_score) -> dict[str, float]:
+    """Per-term weighted contributions — for logs and debugging."""
+    if state.get("state") == "GAME_OVER":
+        return {"terminal": WIN_BONUS if state.get("won") else -LOSS_PENALTY}
+    return {t.name: t.weight * t.fn(prev_state, state, last_score)
+            for t in TERMS}
 
 
 if __name__ == "__main__":
@@ -95,39 +137,58 @@ if __name__ == "__main__":
     FakeScore = namedtuple("FakeScore", "per_joker chips mult total",
                            defaults=({}, 0, 0, 0))
     none = FakeScore(per_joker={})
-
     blind1 = {"small": {"status": "CURRENT", "score": 300}}
 
     # no change -> 0
-    s0 = {"round": {"chips": 0.0}, "ante_num": 1, "round_num": 1, "blinds": blind1}
+    s0 = {"round": {"chips": 0.0}, "ante_num": 1, "round_num": 1,
+          "blinds": blind1, "money": 4}
     assert abs(reward(s0, dict(s0), none)) < 1e-9
 
-    # capped progress: chips toward target count, overkill does not
-    half = {"round": {"chips": 150.0}, "ante_num": 1, "round_num": 1, "blinds": blind1}
-    sealed = {"round": {"chips": 900.0}, "ante_num": 1, "round_num": 1, "blinds": blind1}
-    assert abs(reward(s0, half, none) - 150 * SCALE_CHIPS) < 1e-9
-    assert abs(reward(half, sealed, none) - 150 * SCALE_CHIPS) < 1e-9  # capped at target
+    # score progress is fractional and capped at the target
+    half = {**s0, "round": {"chips": 150.0}}
+    sealed = {**s0, "round": {"chips": 900.0}}
+    assert abs(reward(s0, half, none) - 5.0 * 0.5) < 1e-9          # half blind
+    assert abs(reward(half, sealed, none) - 5.0 * 0.5) < 1e-9      # capped
+
+    # scale-invariance: same fractions at a 30k-chip ante-8 blind
+    big = {"small": {"status": "CURRENT", "score": 30000}}
+    b0 = {"round": {"chips": 0.0}, "ante_num": 8, "round_num": 22,
+          "blinds": big, "money": 4}
+    bh = {**b0, "round": {"chips": 15000.0}}
+    assert abs(reward(b0, bh, none) - 5.0 * 0.5) < 1e-9            # identical
 
     # blind transition resets the counter without a negative spike
-    next_blind = {"round": {"chips": 0.0}, "ante_num": 1, "round_num": 2,
-                  "blinds": {"big": {"status": "CURRENT", "score": 600}}}
-    assert reward(sealed, next_blind, none) == 0.0
+    nxt = {"round": {"chips": 0.0}, "ante_num": 1, "round_num": 2,
+           "blinds": {"big": {"status": "CURRENT", "score": 600}},
+           "money": 4}
+    assert reward(sealed, nxt, none) == 0.0
+
+    # no target visible: legacy absolute shaping (still weighted by TERM)
+    raw_prev = {"round": {"chips": 0.0}, "ante_num": 1, "round_num": 1}
+    raw = {"round": {"chips": 500.0}, "ante_num": 1, "round_num": 1}
+    assert abs(reward(raw_prev, raw, none) - 5.0 * 0.5) < 1e-9
 
     # ante milestone scales with the ante reached
-    a2 = {"round": {"chips": 0.0}, "ante_num": 2, "round_num": 3, "blinds": blind1}
-    assert reward(next_blind, a2, none) == ANTE_BONUS * 2
+    a2 = {**nxt, "ante_num": 2, "round_num": 3}
+    got = reward(nxt, a2, none)
+    assert abs(got - ANTE_BONUS * 2) < 1e-9, got
 
-    # joker term counts mult/xmult only, never chips (no double-count)
+    # joker term counts mult/xmult only, never chips
     fired = FakeScore(per_joker={"j_t": {"chips_added": 300, "mult_added": 5,
                                          "xmult_factor": 3.0}})
     r = reward(s0, half, fired)
-    assert abs(r - (150 * SCALE_CHIPS + 5 * SCALE_MULT + math.log(3.0))) < 1e-9
+    assert abs(r - (2.5 + 0.5 + math.log(3.0))) < 1e-9, r
 
     # terminals dominate and carry no shaping terms
     won = {"state": "GAME_OVER", "won": True}
     lost = {"state": "GAME_OVER", "won": False}
     assert reward(a2, won, None) == WIN_BONUS
     assert reward(a2, lost, None) == -LOSS_PENALTY
+
+    # breakdown mirrors reward() and names its terms
+    bd = reward_breakdown(s0, half, fired)
+    assert set(bd) == {"score", "jokers", "money", "ante"}
+    assert abs(sum(bd.values()) - r) < 1e-9
 
     # edge cases
     assert reward(None, {"round": {}}, None) == 0.0
