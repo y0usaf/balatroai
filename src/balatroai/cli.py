@@ -140,13 +140,26 @@ def watch_emit(state: dict, action: Action, error: str | None,
     print(line, flush=True)
 
 
-def cmd_watch(args) -> int:
-    client = connect(args, headless=False)
-    if args.checkpoint:
+def _make_bot(args):
+    """Build the watch bot; fail before any game window is spawned."""
+    if not args.checkpoint:
+        return get_bot(args.bot)
+    try:
         from .rl.policy_bot import PolicyBot
-        bot = PolicyBot(args.checkpoint)
-    else:
-        bot = get_bot(args.bot)
+
+        return PolicyBot(args.checkpoint)
+    except ImportError as e:
+        sys.exit(
+            f"--checkpoint needs the RL stack ({e}).\n"
+            "The bare `nix run` env doesn't ship torch/sb3; run instead:\n"
+            "  nix develop -c uv run balatroai watch --launch "
+            "--checkpoint <ckpt>"
+        )
+
+
+def cmd_watch(args) -> int:
+    bot = _make_bot(args)
+    client = connect(args, headless=False)
     seed = args.seed or random_seed()
     print(f"bot={bot.name} deck={args.deck} stake={args.stake} seed={seed}\n")
     result = Runner(client, bot, emit=watch_emit).play_game(args.deck, args.stake, seed)
