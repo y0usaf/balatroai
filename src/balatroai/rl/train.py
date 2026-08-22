@@ -81,6 +81,8 @@ def train(workers: int = 4, timesteps: int = 100_000, checkpoint: str = "checkpo
             rewards: list[float] = []
             antes: list[float] = []
             actions: Counter[str] = Counter()
+            terms: dict[str, float] = {}
+            term_steps = 0
             for _ in range(self.n_games):
                 obs = eval_env.reset()
                 done = False
@@ -92,6 +94,9 @@ def train(workers: int = 4, timesteps: int = 100_000, checkpoint: str = "checkpo
                     obs, r, d, info = eval_env.step(action)
                     ep_reward += float(r[0])
                     actions[info[0].get("action_method", "?")] += 1
+                    for name, v in (info[0].get("reward_terms") or {}).items():
+                        terms[name] = terms.get(name, 0.0) + float(v)
+                    term_steps += 1
                     done = bool(d[0])
                 antes.append(float(info[0].get("state", {}).get("ante_num", 0)))
                 rewards.append(ep_reward)
@@ -99,6 +104,8 @@ def train(workers: int = 4, timesteps: int = 100_000, checkpoint: str = "checkpo
             self.logger.record("eval/avg_ante", sum(antes) / len(antes))
             for name, c in sorted(actions.items()):
                 self.logger.record(f"eval/action_{name}", c)
+            for name, total in sorted(terms.items()):
+                self.logger.record(f"eval/term_{name}", total / max(term_steps, 1))
             # rolling checkpoint so the policy can be watched mid-training
             self.model.save(checkpoint + "_latest")
             env.save(checkpoint + "_latest_vecnormalize.pkl")

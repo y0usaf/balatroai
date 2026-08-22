@@ -16,7 +16,7 @@ training stack.  Run the self-check with the ephemeral gymnasium only:
 from __future__ import annotations
 
 try:  # package/relative imports (normal usage)
-    from .reward import reward
+    from .reward import reward, reward_breakdown
     from ..bots import Action
     from ..bots.heuristic import HeuristicBot
     from ..runner import FALLBACKS, RPCError
@@ -25,7 +25,7 @@ except ImportError:  # run as a bare script (python src/.../rl/env.py)
     import os
     import sys
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
-    from balatroai.rl.reward import reward
+    from balatroai.rl.reward import reward, reward_breakdown
     from balatroai.bots import Action
     from balatroai.bots.heuristic import HeuristicBot
     from balatroai.runner import FALLBACKS, RPCError
@@ -213,13 +213,15 @@ class BalatroEnv(_EnvBase):
             except RPCError:
                 self.state = self.client.call("gamestate")
         last_score = self.client.last_score()
+        terminated = bool(self.state.get("state") == "GAME_OVER")
         r = reward(prev_state, self.state, last_score, act)
         truncated = bool(self._step_count >= self.max_steps)
         self._step_count += 1
         info = {"state": self.state, "last_score": last_score,
-                "action_method": act.method}
+                "action_method": act.method,
+                "reward_terms": reward_breakdown(prev_state, self.state,
+                                                 last_score, act)}
         return self.obs(self.state), float(r), terminated, truncated, info
-
     # -- intent -> concrete Action ----------------------------------------
     def _resolve_action(self, intent: int, state: dict) -> Action:
         return resolve_intent(int(intent), state, self._bot)

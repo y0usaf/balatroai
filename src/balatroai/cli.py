@@ -185,7 +185,7 @@ def cmd_run(args) -> int:
 
     seeds = [args.seed] * args.games if args.seed else BENCH_SEEDS[: args.games]
 
-    bots = [get_bot(args.bot)]
+    bots = [_make_bot(args)]
     if args.compare:
         bots.append(get_bot("random"))
 
