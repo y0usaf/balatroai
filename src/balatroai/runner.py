@@ -23,7 +23,8 @@ FALLBACKS: dict[str, Action] = {
     "SMODS_BOOSTER_OPENED": Action("pack", {"skip": True}),
 }
 
-Emit = Callable[[dict, Action, str | None], None]
+# prev = state snapshot taken before the action was dispatched (for narration).
+Emit = Callable[[dict, Action, str | None, dict | None], None]
 
 
 @dataclass
@@ -55,20 +56,32 @@ class Runner:
         state = self.client.call("start", params)
 
         steps = 0
+        strikes = 0
         while state.get("state") != "GAME_OVER" and steps < self.max_steps:
             steps += 1
+            prev_state = state
             action = self.bot.act(state)
             error = None
             try:
                 state = self.client.call(action.method, action.params)
+                strikes = 0
             except RPCError as e:
+                # Isolated failures are usually transient (e.g. buying while a
+                # reroll is refilling the shop UI): refresh the snapshot and
+                # let the bot replan instead of advancing past the phase.
+                # Third strike in a row falls back to the phase action, which
+                # always advances, so a persistently bad action can't loop.
                 error = str(e)
-                fb = FALLBACKS.get(state.get("state", ""), Action("gamestate"))
+                strikes += 1
                 try:
-                    state = self.client.call(fb.method, fb.params)
+                    if strikes >= 3:
+                        fb = FALLBACKS.get(state.get("state", ""), Action("gamestate"))
+                        state = self.client.call(fb.method, fb.params)
+                    else:
+                        state = self.client.call("gamestate")
                 except RPCError:
                     state = self.client.call("gamestate")
-            self.emit(state, action, error)
+            self.emit(state, action, error, prev_state)
 
         return GameResult(
             won=bool(state.get("won")),

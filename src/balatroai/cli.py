@@ -110,7 +110,8 @@ def cmd_setup(args) -> int:
     return 0
 
 
-def watch_emit(state: dict, action: Action, error: str | None) -> None:
+def watch_emit(state: dict, action: Action, error: str | None,
+               prev: dict | None = None) -> None:
     ante = state.get("ante_num", "?")
     rnd_num = state.get("round_num", "?")
     money = state.get("money", 0)
@@ -124,6 +125,13 @@ def watch_emit(state: dict, action: Action, error: str | None) -> None:
             f"  → {chips} chips"
             f" · {rnd.get('hands_left', '?')}h/{rnd.get('discards_left', '?')}d left"
         )
+        idxs = action.params.get("cards") or []
+        pcards = (prev.get("hand") or {}).get("cards", []) if prev else []
+        chosen = [fmt_card(pcards[i]) for i in idxs
+                  if isinstance(i, int) and i < len(pcards)]
+        if chosen:
+            verb = "played" if action.method == "play" else "discarded"
+            line += "\n" + " " * 4 + f"{verb}: " + " ".join(chosen)
     if state.get("state") == "SELECTING_HAND":
         cards = state.get("hand", {}).get("cards", [])
         line += "\n" + " " * 4 + "hand: " + " ".join(fmt_card(c) for c in cards)
