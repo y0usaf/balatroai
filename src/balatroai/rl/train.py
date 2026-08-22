@@ -16,9 +16,29 @@ def _fmt_card(c: dict) -> str:
     return c.get("label", "?")
 
 
+def load_model(checkpoint: str, env=None, device: str | None = None):
+    """Load a PPO or MaskablePPO checkpoint as its right class.
+
+    SB3 zips don't record their algorithm class, so try the masked loader
+    first and fall back to plain PPO for pre-masking checkpoints.
+    """
+    from stable_baselines3 import PPO
+    try:
+        from sb3_contrib import MaskablePPO
+    except ImportError:  # train extra without sb3-contrib: legacy only
+        MaskablePPO = None
+    kwargs = {} if device is None else {"device": device}
+    if MaskablePPO is not None:
+        try:
+            return MaskablePPO.load(checkpoint, env=env, **kwargs)
+        except (TypeError, ValueError):
+            pass  # unmasked checkpoint: its policy rejects the masked ctor
+    return PPO.load(checkpoint, env=env, **kwargs)
+
+
 def train(workers: int = 4, timesteps: int = 100_000, checkpoint: str = "checkpoint",
           eval_freq: int = 5000, n_eval_games: int = 20) -> None:
-    from stable_baselines3 import PPO
+    from sb3_contrib import MaskablePPO
     from stable_baselines3.common.callbacks import BaseCallback
     from stable_baselines3.common.vec_env import (
         DummyVecEnv,
@@ -66,7 +86,9 @@ def train(workers: int = 4, timesteps: int = 100_000, checkpoint: str = "checkpo
                 done = False
                 ep_reward = 0.0
                 while not done:
-                    action, _ = self.model.predict(obs, deterministic=True)
+                    masks = eval_env.env_method("action_masks")
+                    action, _ = self.model.predict(
+                        obs, deterministic=True, action_masks=masks)
                     obs, r, d, info = eval_env.step(action)
                     ep_reward += float(r[0])
                     actions[info[0].get("action_method", "?")] += 1
@@ -82,7 +104,8 @@ def train(workers: int = 4, timesteps: int = 100_000, checkpoint: str = "checkpo
             env.save(checkpoint + "_latest_vecnormalize.pkl")
             return True
 
-    model = PPO("MlpPolicy", env, verbose=1)
+    # MlpPolicy PPO trains faster on CPU than on GPU (sb3#1245).
+    model = MaskablePPO("MlpPolicy", env, verbose=1, device="cpu")
     model.learn(total_timesteps=timesteps, callback=EvalAndLogCallback())
     model.save(checkpoint)
     env.save(checkpoint + "_vecnormalize.pkl")
@@ -92,21 +115,23 @@ def train(workers: int = 4, timesteps: int = 100_000, checkpoint: str = "checkpo
 
 def watch_checkpoint(checkpoint: str, games: int = 1, seed: str | None = None) -> None:
     """Load a trained policy and play it on the sim with per-step narration."""
-    from stable_baselines3 import PPO
     from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
     from .env import BalatroEnv
 
     env = DummyVecEnv([lambda: BalatroEnv(seed=seed)])
     env = VecNormalize.load(checkpoint + "_vecnormalize.pkl", env)
-    model = PPO.load(checkpoint, env=env)
+    model = load_model(checkpoint, env=env)
+    masked = type(model).__name__ == "MaskablePPO"
 
     for g in range(games):
         obs = env.reset()
         done = False
         print(f"--- game {g + 1} ---")
         while not done:
-            action, _ = model.predict(obs, deterministic=True)
+            kwargs = ({"action_masks": env.env_method("action_masks")}
+                      if masked else {})
+            action, _ = model.predict(obs, deterministic=True, **kwargs)
             obs, r, d, info = env.step(action)
             st = info[0]["state"]
             method = info[0]["action_method"]

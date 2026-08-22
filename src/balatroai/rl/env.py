@@ -231,6 +231,10 @@ class BalatroEnv(_EnvBase):
         state = state if state is not None else self.state
         return encode_obs(state)
 
+    def action_masks(self) -> list[int]:
+        """Legal-intent mask for MaskablePPO / masked predict."""
+        return action_masks(self.state, self._bot)
+
     @staticmethod
     def _blind_score(state: dict) -> float:
         return _blind_score(state)
@@ -346,6 +350,46 @@ def resolve_intent(intent: int, state: dict, bot) -> Action:
     return action
 
 
+def action_masks(state: dict, bot) -> list[int]:
+    """1 where ``resolve_intent`` would honor the intent in this phase.
+
+    The mask mirrors resolve_intent exactly — including the sub-intents that
+    depend on the bot's helpers (discard vs play, buy vs use, sell/reroll
+    availability) — so a policy sampling under this mask can never emit an
+    intent that silently falls back.  Unknown/transitional phases unmask
+    everything: each intent then resolves through the tagged [fb] path,
+    which always advances.
+
+    Pure: reads ``state``, queries the bot's phase helpers; no I/O.
+    """
+    phase = state.get("state", "")
+    m = [0] * len(_INTENT_NAMES)
+    if phase == "BLIND_SELECT":
+        m[0] = 1
+    elif phase == "SELECTING_HAND":
+        m[1] = 1
+        if bot._hand(state).method == "discard":
+            m[2] = 1
+    elif phase == "SHOP":
+        shop_act = bot._shop(state)
+        if shop_act.method == "buy":
+            m[3] = 1
+        if shop_act.method == "use":
+            m[4] = 1
+        m[5] = 1  # leaving the shop is always legal
+        if bot._sell(state) is not None:
+            m[8] = 1
+        if bot._reroll(state) is not None:
+            m[9] = 1
+    elif phase == "ROUND_EVAL":
+        m[6] = 1
+    elif phase == "SMODS_BOOSTER_OPENED":
+        m[7] = 1
+    if not any(m):
+        return [1] * len(_INTENT_NAMES)
+    return m
+
+
 # -- tiny stdlib stand-ins so the env works even without gymnasium ----------
 class _Discrete:
     def __init__(self, n: int):
@@ -387,7 +431,8 @@ def _as_f32(vec):
 
 
 __all__ = ["BalatroEnv", "OBS_DIM", "N_SCALARS", "HAND_SLOTS", "HAND_DIM",
-           "JOKER_KEYS", "JOKER_DIM", "_OBS_DOC", "encode_obs", "resolve_intent"]
+           "JOKER_KEYS", "JOKER_DIM", "_OBS_DOC", "encode_obs", "resolve_intent",
+           "action_masks"]
 
 
 if __name__ == "__main__":
