@@ -12,10 +12,9 @@ terminals dominate everything):
                   Scale-invariant: clearing a 300-chip ante-1 blind counts
                   the same as clearing a 30k-chip ante-8 blind, unlike the
                   old absolute chips/1000 whose value drifted 100x across
-                  antes.  Capped at the target (no overkill farming) and
-                  gated to within-one-blind steps (the chip counter resets
-                  across transitions).  Falls back to absolute/1000 when no
-                  blind target is visible.
+                  antes.  Capped at the target (no overkill farming),
+                  gated to within-one-blind steps, and gated on blind
+                  identity: no visible target, no shaping.
   jokers          per-joker mult_added/10 + log(xmult_factor).  chips_added
                   already lands in score progress; counting it twice biased
                   toward chip jokers.
@@ -44,7 +43,6 @@ from ..bots.heuristic import boss_card_limits
 ANTE_BONUS = 5.0
 WIN_BONUS = 50.0
 LOSS_PENALTY = 20.0
-SCALE_CHIPS = 1.0 / 1000.0  # legacy fallback when no blind target visible
 
 
 def _f(d: dict, key: str, default: float = 0.0) -> float:
@@ -59,6 +57,18 @@ def blind_target(state: dict | None) -> float:
             return float(blind.get("score", 0) or 0)
     return 0.0
 
+def _score_progress(prev: dict | None, state: dict, last_score,
+                    action=None) -> float:
+    if not _same_blind(prev, state):
+        return 0.0
+    target = blind_target(state)
+    # Blind identity, not round counters: the sim resets chips to 0 while
+    # (ante_num, round_num) still match the sealed blind, which would leak a
+    # large negative spike at every transition.  Consecutive blinds never
+    # share a target, so an unchanged target proves it is the same blind.
+    if target <= 0 or blind_target(prev) != target:
+        return 0.0
+    return (_progress(state) - _progress(prev)) / target
 
 def _progress(state: dict | None) -> float:
     """Chips banked toward the current blind, capped at its target."""
@@ -75,16 +85,6 @@ def _same_blind(prev: dict | None, state: dict) -> bool:
     ) == (state.get("ante_num"), state.get("round_num"))
 
 
-def _score_progress(prev: dict | None, state: dict, last_score,
-                    action=None) -> float:
-    if not _same_blind(prev, state):
-        return 0.0
-    target = blind_target(state)
-    if target <= 0:  # target invisible: legacy absolute shaping
-        p = float(state.get("round", {}).get("chips", 0.0)) if state else 0.0
-        q = float(prev.get("round", {}).get("chips", 0.0)) if prev else 0.0
-        return (p - q) * SCALE_CHIPS
-    return (_progress(state) - _progress(prev)) / target
 
 
 def _jokers(prev: dict | None, state: dict, last_score, action=None) -> float:
@@ -184,11 +184,12 @@ if __name__ == "__main__":
            "blinds": {"big": {"status": "CURRENT", "score": 600}},
            "money": 4}
     assert reward(sealed, nxt, none) == 0.0
-
-    # no target visible: legacy absolute shaping (still weighted by TERM)
-    raw_prev = {"round": {"chips": 0.0}, "ante_num": 1, "round_num": 1}
-    raw = {"round": {"chips": 500.0}, "ante_num": 1, "round_num": 1}
-    assert abs(reward(raw_prev, raw, none) - 5.0 * 0.5) < 1e-9
+    # sim blind transitions reset chips while (ante, round) still match:
+    # the identity gate must zero that step instead of spiking negative
+    same_counters = {"round": {"chips": 0.0}, "ante_num": 1, "round_num": 1,
+                     "blinds": {"big": {"status": "CURRENT", "score": 600}},
+                     "money": 4}
+    assert reward(sealed, same_counters, none) == 0.0
 
     # ante milestone scales with the ante reached
     a2 = {**nxt, "ante_num": 2, "round_num": 3}
