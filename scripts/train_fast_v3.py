@@ -44,6 +44,7 @@ def worker_proc(
     gamma: float,
     shaping_coef: float,
     joker_coef: float,
+    play_coef: float,
     n_workers: int,
     curriculum_pool: str | None,
     curriculum_frac: float,
@@ -54,7 +55,8 @@ def worker_proc(
     from jackdaw.env.gymnasium_wrapper import MAX_ACTIONS, BalatroGymnasiumEnv
 
     from policy_v3 import OBS_DIM, encode_action_table, flatten_obs
-    from shaping import JokerBonusTracker, PotentialShaper
+    from shaping import JokerBonusTracker, PotentialShaper, play_quality_bonus
+    from jackdaw.env.action_space import ActionType
 
     # Each worker keeps only its shard, so the pool costs one copy in total
     # rather than one per worker.
@@ -116,8 +118,16 @@ def worker_proc(
         act_ev.clear()
         for i, env in enumerate(envs):
             gi = lo + i
-            obs, r, term, trunc, info = env.step(int(act_buf[gi]))
+            a_int = int(act_buf[gi])
+            raw_pre = env._inner._adapter.raw_state
+            fa = env._action_table[a_int]
+            obs, r, term, trunc, info = env.step(a_int)
             done = term or trunc
+            if play_coef and int(fa.action_type) == int(ActionType.PlayHand):
+                # Oracle hand quality: the exact score this play will add,
+                # computed by the engine before it happens.  Dense per-play
+                # teaching signal -- no waiting for the blind to clear.
+                r += play_coef * play_quality_bonus(raw_pre, fa.card_target)
             if shaping_coef:
                 # F = gamma*PHI(s') - PHI(s), with PHI(terminal) = 0. Must be
                 # read before reset, or the potential of the *next* episode's
@@ -172,6 +182,9 @@ def main() -> None:
     parser.add_argument("--joker-coef", type=float, default=1.0,
                         help="scale of the measured per-joker contribution "
                              "bonus; 0 disables it")
+    parser.add_argument("--play-quality-coef", type=float, default=1.0,
+                        help="scale of the oracle play-quality reward "
+                             "(engine-computed score vs blind target)")
     parser.add_argument("--gae-lambda", type=float, default=0.95)
     parser.add_argument("--clip", type=float, default=0.2)
     parser.add_argument("--ent-coef", type=float, default=0.01)
@@ -263,7 +276,7 @@ def main() -> None:
             args=(w, args.envs_per_worker, n_env, shm_names,
                   act_evs[w], obs_evs[w], stats_q, args.max_steps,
                   args.gamma, args.shaping_coef, args.joker_coef,
-                  args.workers,
+                  args.play_quality_coef, args.workers,
                   args.curriculum_pool, args.curriculum_frac),
             daemon=True,
         )

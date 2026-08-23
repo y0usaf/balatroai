@@ -74,6 +74,52 @@ def joker_quality(joker: Any) -> float:
 _JOKER_REF = 20.0  # typical strong single-joker hand output, for reward scale
 
 
+def play_quality_bonus(gs: dict[str, Any] | None,
+                       card_indices) -> float:
+    """Exact would-be score of the selected play, normalized to the blind.
+
+    Calls the engine's own score_hand pipeline on the hypothetical play --
+    jokers, hand levels, boss debuffs all included -- so 'hand quality' is
+    literally calculated instead of discovered.  Deterministic: runs on a
+    dedicated RNG stream and never consumes game randomness.  Capped at
+    1.5x target so overkill still saturates.
+    """
+    if not gs or not card_indices:
+        return 0.0
+
+    from jackdaw.engine.rng import PseudoRandom
+    from jackdaw.engine.scoring import score_hand
+
+    hand = gs.get("hand")
+    if isinstance(hand, list):  # DirectAdapter raw_state: hand IS the list
+        cards = hand
+    else:
+        cards = getattr(hand, "cards", None)
+        if cards is None and isinstance(hand, dict):
+            cards = hand.get("cards")
+        cards = cards or []
+    idxs = [int(i) for i in card_indices]
+    played = [cards[i] for i in idxs if 0 <= i < len(cards)]
+    if not played:
+        return 0.0
+    played_set = set(idxs)
+    held = [c for i, c in enumerate(cards) if i not in played_set]
+
+    jokers = gs.get("jokers")
+    if hasattr(jokers, "cards"):
+        jokers = jokers.cards
+
+    blind = gs.get("blind")
+    target = float(getattr(blind, "chips", 0) or 0) if blind is not None else 0.0
+
+    result = score_hand(played, held, jokers, gs.get("hand_levels"), blind,
+                        PseudoRandom("ORACLE"), game_state=gs)
+    total = float(result.total)
+    if target <= 0:
+        return min(total / 1000.0, 1.5)
+    return min(total / target, 1.5)
+
+
 class JokerBonusTracker:
     """Pays each scoring hand's measured joker output exactly once.
 
