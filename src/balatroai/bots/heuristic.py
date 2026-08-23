@@ -154,6 +154,18 @@ class HeuristicBot:
                 return Action("buy", {"card": i}, note=f"buy {c.get('label')} (${cost})")
             if c.get("set") == "PLANET":
                 return Action("buy", {"card": i}, note=f"buy {c.get('label')} (${cost})")
+
+        # Rack full but a better joker is on sale: evict the measured dud
+        # (ledger) or a known-weak holder to make room for it.
+        if not joker_room:
+            upgrade = next((c for c in shop
+                            if c.get("set") == "JOKER"
+                            and money - c.get("cost", {}).get("buy", 999) >= reserve),
+                           None)
+            dud = self._sell(state) or self._cheapest_holder(state)
+            if upgrade is not None and dud is not None:
+                return Action(dud.method, dud.params,
+                              note=f"{dud.note} -> make room for {upgrade.get('label')}")
         return Action("next_round", note="leave shop")
 
     # -- selling / rerolling ---------------------------------------------
@@ -175,6 +187,21 @@ class HeuristicBot:
             if mod.get("rental") or mod.get("perishable") or j.get("key") in WEAK_JOKERS:
                 return Action("sell", {"joker": i}, note=f"sell {j.get('label')}")
         return None
+
+    def _cheapest_holder(self, state: dict) -> Action | None:
+        """Sell-cost fallback: evict the least invested non-eternal holder."""
+        best, best_cost = None, None
+        for i, j in enumerate((state.get("jokers") or {}).get("cards", [])):
+            if (j.get("modifier") or {}).get("eternal"):
+                continue
+            cost = (j.get("cost") or {}).get("sell", 999)
+            if best_cost is None or cost < best_cost:
+                best, best_cost = i, cost
+        if best is None:
+            return None
+        card = ((state.get("jokers") or {}).get("cards") or [])[best]
+        return Action("sell", {"joker": best},
+                      note=f"sell {card.get('label', '?')} (cheapest)")
 
     def _reroll(self, state: dict) -> Action | None:
         """Reroll the shop if we can afford it above reserve, else None."""
