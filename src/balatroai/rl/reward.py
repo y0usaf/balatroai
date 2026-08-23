@@ -35,8 +35,9 @@ VecNormalize(norm_reward=True) absorbs residual scale drift.
 from __future__ import annotations
 
 import math
+import os
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ..bots.heuristic import boss_card_limits
 
@@ -126,13 +127,41 @@ class Term:
     fn: Callable[..., float]
 
 
-TERMS: tuple[Term, ...] = (
+_BASE_TERMS: tuple[Term, ...] = (
     Term("score", 5.0, _score_progress),
     Term("jokers", 1.0, _jokers),
     Term("money", 1.0, _money),
     Term("ante", 1.0, _ante),
     Term("boss_violation", -2.0, _boss_violation),
 )
+
+
+def _parse_overrides(spec: str) -> dict[str, float]:
+    """Parse 'name=weight, name=weight' — unknown names fail loudly."""
+    valid = {t.name for t in _BASE_TERMS}
+    out: dict[str, float] = {}
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        name, eq, value = part.partition("=")
+        name = name.strip()
+        if not eq or name not in valid:
+            raise ValueError(f"bad override {part!r}; valid terms: {sorted(valid)}")
+        out[name] = float(value)
+    return out
+
+
+def _with_overrides(terms: tuple[Term, ...], spec: str) -> tuple[Term, ...]:
+    """Runtime weight tuning, e.g. BALATROAI_TERMS='score=3,jokers=2'."""
+    if not spec.strip():
+        return terms
+    weights = _parse_overrides(spec)
+    return tuple(replace(t, weight=weights.get(t.name, t.weight))
+                 for t in terms)
+
+
+TERMS = _with_overrides(_BASE_TERMS, os.environ.get("BALATROAI_TERMS", ""))
 
 
 def reward(prev_state: dict | None, state: dict, last_score,
@@ -154,6 +183,8 @@ def reward_breakdown(prev_state: dict | None, state: dict, last_score,
 
 
 if __name__ == "__main__":
+    # test the default table even when BALATROAI_TERMS is set
+    TERMS = _BASE_TERMS
     from collections import namedtuple
 
     FakeScore = namedtuple("FakeScore", "per_joker chips mult total",
@@ -237,6 +268,17 @@ if __name__ == "__main__":
     bd = reward_breakdown(s0, half, fired)
     assert set(bd) == {"score", "jokers", "money", "ante", "boss_violation"}
     assert abs(sum(bd.values()) - r) < 1e-9
+
+    # overrides: retune weights without touching code; unknown names fail
+    tuned = _with_overrides(_BASE_TERMS, "score=3,jokers=2")
+    assert {t.name: t.weight for t in tuned} == {
+        "score": 3.0, "jokers": 2.0, "money": 1.0, "ante": 1.0,
+        "boss_violation": -2.0}
+    try:
+        _parse_overrides("score=1,nope=2")
+        raise SystemExit("expected ValueError")
+    except ValueError:
+        pass
 
     # edge cases
     assert reward(None, {"round": {}}, None) == 0.0

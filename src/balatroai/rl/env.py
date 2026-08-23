@@ -19,6 +19,7 @@ try:  # package/relative imports (normal usage)
     from .reward import reward, reward_breakdown
     from ..bots import Action
     from ..bots.heuristic import HeuristicBot
+    from ..bots.ledger import ContributionLedger
     from ..runner import FALLBACKS, RPCError
     from ..sim import SimClient
 except ImportError:  # run as a bare script (python src/.../rl/env.py)
@@ -28,6 +29,7 @@ except ImportError:  # run as a bare script (python src/.../rl/env.py)
     from balatroai.rl.reward import reward, reward_breakdown
     from balatroai.bots import Action
     from balatroai.bots.heuristic import HeuristicBot
+    from balatroai.bots.ledger import ContributionLedger
     from balatroai.runner import FALLBACKS, RPCError
     from balatroai.sim import SimClient
 
@@ -73,9 +75,11 @@ JOKER_KEYS: list[str] = [
 ]
 JOKER_KEYS_SET = frozenset(JOKER_KEYS)
 N_SCALARS = 11
+LEDGER_SLOTS = 5  # held-joker limit; one measured-contribution scalar each
 HAND_DIM = HAND_SLOTS * (_RANK_LEN := 1 + len(_SUITS))  # 8 * 5
 JOKER_DIM = len(JOKER_KEYS) + 1  # +1 "other" slot
-OBS_DIM = N_SCALARS + HAND_DIM + JOKER_DIM
+LEDGER_DIM = LEDGER_SLOTS
+OBS_DIM = N_SCALARS + HAND_DIM + JOKER_DIM + LEDGER_DIM
 
 
 # ---------------------------------------------------------------------------
@@ -102,10 +106,14 @@ Block 2 - hand ({HAND_SLOTS} slots x {_RANK_LEN} = {HAND_DIM}):
     [rank(0-13), suit_S, suit_H, suit_D, suit_C]
   rank: 0 = empty slot, 1..13 = 2..A.
   suit: one-hot; empty slot has all-zero suit bits.
-
 Block 3 - jokers bag-of-keys ({len(JOKER_KEYS)}+1 = {JOKER_DIM}):
   One-hot presence of each of the first {len(JOKER_KEYS)} hardcoded joker
   keys in ``JOKER_KEYS``, followed by a final "other/unknown" bit set when a
+  held joker key is not in the list.  Presence (not multiplicity).
+
+Block 4 - joker ledger ({LEDGER_SLOTS}):
+  Squashed measured contribution per held joker slot (v/(1+v); 0 when
+  unobserved or empty) accumulated by the ContributionLedger.
   held joker key is not in the list.  Presence (not multiplicity).
 """
 
@@ -136,7 +144,8 @@ class BalatroEnv(_EnvBase):
         super().__init__()
         self.client = SimClient()
         self._bot = HeuristicBot()
-
+        self._ledger = ContributionLedger()
+        self._bot.contribution = self._ledger
         self.action_space = self._spaces_discrete(10)
         self.observation_space = self._observations_box()
 
@@ -213,6 +222,7 @@ class BalatroEnv(_EnvBase):
             except RPCError:
                 self.state = self.client.call("gamestate")
         last_score = self.client.last_score()
+        self._ledger.observe(last_score)
         terminated = bool(self.state.get("state") == "GAME_OVER")
         r = reward(prev_state, self.state, last_score, act)
         truncated = bool(self._step_count >= self.max_steps)
@@ -230,7 +240,7 @@ class BalatroEnv(_EnvBase):
     def obs(self, state: dict | None = None):
         """Feature vector for ``state`` (defaults to current)."""
         state = state if state is not None else self.state
-        return encode_obs(state)
+        return encode_obs(state, self._ledger.values_for(state))
 
     def action_masks(self) -> list[int]:
         """Legal-intent mask for MaskablePPO / masked predict."""
@@ -256,7 +266,7 @@ def _blind_score(state: dict) -> float:
     return 0.0
 
 
-def encode_obs(state: dict) -> list[float]:
+def encode_obs(state: dict, joker_ledger=None) -> list[float]:
     """Full fixed-size observation vector for ``state`` (see ``_OBS_DOC``).
 
     Pure: reads the gamestate snapshot, writes nothing; does not require a
@@ -304,6 +314,9 @@ def encode_obs(state: dict) -> list[float]:
         else:
             other = 1.0
     vec.extend(present)
+    ledger = [float(v) for v in (joker_ledger or [])][:LEDGER_SLOTS]
+    ledger += [0.0] * (LEDGER_SLOTS - len(ledger))
+    vec.extend(min(v, 1e6) / (1.0 + min(v, 1e6)) for v in ledger)
     vec.append(other)
 
     return _as_f32(vec)
@@ -433,8 +446,7 @@ def _as_f32(vec):
 
 __all__ = ["BalatroEnv", "OBS_DIM", "N_SCALARS", "HAND_SLOTS", "HAND_DIM",
            "JOKER_KEYS", "JOKER_DIM", "_OBS_DOC", "encode_obs", "resolve_intent",
-           "action_masks"]
-
+           "action_masks", "LEDGER_DIM"]
 
 if __name__ == "__main__":
 

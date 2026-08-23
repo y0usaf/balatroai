@@ -42,6 +42,10 @@ def current_blind(state: dict) -> dict | None:
 class HeuristicBot:
     name = "heuristic"
 
+    # Optional ContributionLedger injected by the driving env; when present
+    # and fully observed, _sell evicts the empirically weakest holder.
+    contribution = None
+
     # keep this much money in the shop from ante 3 on (interest-ish reserve)
     reserve_from_ante = 3
     reserve = 10
@@ -154,9 +158,19 @@ class HeuristicBot:
 
     # -- selling / rerolling ---------------------------------------------
     def _sell(self, state: dict) -> Action | None:
-        """Sell the weakest held joker (rental/perishable/known-weak), else None."""
+        """Sell the weakest held joker: measured dud first, then the
+        rental/perishable/known-weak list."""
         jokers = state.get("jokers", {})
-        for i, j in enumerate(jokers.get("cards", [])):
+        cards = jokers.get("cards", [])
+        ledger = self.contribution
+        if ledger is not None:
+            weak_key = ledger.weakest_key(state)
+            if weak_key is not None:
+                for i, j in enumerate(cards):
+                    if j.get("key") == weak_key:
+                        return Action("sell", {"joker": i},
+                                      note=f"sell {j.get('label')} (ledger)")
+        for i, j in enumerate(cards):
             mod = j.get("modifier", {}) or {}
             if mod.get("rental") or mod.get("perishable") or j.get("key") in WEAK_JOKERS:
                 return Action("sell", {"joker": i}, note=f"sell {j.get('label')}")
