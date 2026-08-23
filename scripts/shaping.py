@@ -74,29 +74,36 @@ def joker_quality(joker: Any) -> float:
 _JOKER_REF = 20.0  # typical strong single-joker hand output, for reward scale
 
 
-def joker_contribution(gs: dict[str, Any] | None) -> float:
-    """Measured per-joker output this hand, normalized to reward scale.
+class JokerBonusTracker:
+    """Pays each scoring hand's measured joker output exactly once.
 
-    Reads ``last_score_result.per_joker`` from the engine (per-hand data).
-    This replaces the static `joker_quality` prior with evidence the policy
-    can feel: a joker that actually contributes gets credit in the step's
-    reward.  Deliberately additive -- NOT part of the potential shaping, so
-    the NHR invariance checked by test_shaping.py is preserved.
+    ``gs['last_score_result']`` PERSISTS between hands, so a naive read
+    re-pays the same stale bonus every step -- the policy learns to score
+    one hand and stall-farm it forever.  Dedupe by result identity: a new
+    ScoreResult object means a newly scored hand.
     """
-    if not gs:
-        return 0.0
-    result = gs.get("last_score_result")
-    per_joker = getattr(result, "per_joker", None) if result else None
-    if not per_joker:
-        return 0.0
-    total = 0.0
-    for entry in per_joker.values():
-        val = (float(entry.get("chips_added", 0) or 0) / 100.0
-               + float(entry.get("mult_added", 0) or 0)
-               + 25.0 * math.log(
-                   max(1.0, float(entry.get("xmult_factor", 1.0) or 1))))
-        total += min(val / _JOKER_REF, 1.0)
-    return total
+
+    __slots__ = ("_paid",)
+
+    def __init__(self) -> None:
+        self._paid: Any = None
+
+    def update(self, gs: dict[str, Any] | None) -> float:
+        """Bonus for the transition that just happened (0 unless a new hand
+        was scored since the last call)."""
+        result = gs.get("last_score_result") if gs else None
+        if result is None or result is self._paid:
+            return 0.0
+        self._paid = result
+        per_joker = getattr(result, "per_joker", None) or {}
+        total = 0.0
+        for entry in per_joker.values():
+            val = (float(entry.get("chips_added", 0) or 0) / 100.0
+                   + float(entry.get("mult_added", 0) or 0)
+                   + 25.0 * math.log(
+                       max(1.0, float(entry.get("xmult_factor", 1.0) or 1))))
+            total += min(val / _JOKER_REF, 1.0)
+        return total
 
 
 def potential(gs: dict[str, Any] | None) -> float:

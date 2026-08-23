@@ -54,7 +54,7 @@ def worker_proc(
     from jackdaw.env.gymnasium_wrapper import MAX_ACTIONS, BalatroGymnasiumEnv
 
     from policy_v3 import OBS_DIM, encode_action_table, flatten_obs
-    from shaping import PotentialShaper, joker_contribution
+    from shaping import JokerBonusTracker, PotentialShaper
 
     # Each worker keeps only its shard, so the pool costs one copy in total
     # rather than one per worker.
@@ -76,6 +76,7 @@ def worker_proc(
     lo = rank * k
     envs = []
     shapers = []
+    jtrackers: list[JokerBonusTracker] = []
     was_injected = [False] * k
 
     def start_episode(env, i: int):
@@ -103,6 +104,7 @@ def worker_proc(
         )
         envs.append(env)
         shapers.append(PotentialShaper(gamma, shaping_coef))
+        jtrackers.append(JokerBonusTracker())
         obs = start_episode(env, i)
         obs_buf[lo + i] = flatten_obs(obs)
         nact_buf[lo + i] = len(env._action_table)
@@ -124,9 +126,9 @@ def worker_proc(
                     None if done else env._inner._adapter.raw_state, done)
             if joker_coef:
                 # Measured per-joker output this hand (not potential-based):
-                # rewards jokers that actually contribute, replacing the
-                # static joker_quality prior with evidence.
-                r += joker_coef * joker_contribution(
+                # pays once per newly scored hand -- stale results are
+                # deduped by identity so stalling cannot farm the bonus.
+                r += joker_coef * jtrackers[i].update(
                     env._inner._adapter.raw_state)
             if done:
                 # Injected episodes are reported separately: they start past
