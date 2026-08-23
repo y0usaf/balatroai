@@ -60,7 +60,7 @@ def main() -> None:
         bot = get_bot(args.bot)
         taken: list[dict] = []
 
-        def emit(state: dict, _action, _error) -> None:
+        def emit(state: dict, _action, _error, _prev=None) -> None:
             ante = state.get("ante_num", 0) or 0
             if ante < args.min_ante:
                 return
