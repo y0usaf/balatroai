@@ -43,6 +43,7 @@ def worker_proc(
     max_steps: int,
     gamma: float,
     shaping_coef: float,
+    joker_coef: float,
     n_workers: int,
     curriculum_pool: str | None,
     curriculum_frac: float,
@@ -53,7 +54,7 @@ def worker_proc(
     from jackdaw.env.gymnasium_wrapper import MAX_ACTIONS, BalatroGymnasiumEnv
 
     from policy_v3 import OBS_DIM, encode_action_table, flatten_obs
-    from shaping import PotentialShaper
+    from shaping import PotentialShaper, joker_contribution
 
     # Each worker keeps only its shard, so the pool costs one copy in total
     # rather than one per worker.
@@ -121,6 +122,12 @@ def worker_proc(
                 # opening state leaks into this episode's final reward.
                 r += shapers[i].step(
                     None if done else env._inner._adapter.raw_state, done)
+            if joker_coef:
+                # Measured per-joker output this hand (not potential-based):
+                # rewards jokers that actually contribute, replacing the
+                # static joker_quality prior with evidence.
+                r += joker_coef * joker_contribution(
+                    env._inner._adapter.raw_state)
             if done:
                 # Injected episodes are reported separately: they start past
                 # ante 1, so mixing them into the headline would inflate it.
@@ -160,6 +167,9 @@ def main() -> None:
     parser.add_argument("--shaping-coef", type=float, default=1.0,
                         help="scale of the potential-based shaping term "
                              "(money/jokers/hand levels); 0 disables it")
+    parser.add_argument("--joker-coef", type=float, default=1.0,
+                        help="scale of the measured per-joker contribution "
+                             "bonus; 0 disables it")
     parser.add_argument("--gae-lambda", type=float, default=0.95)
     parser.add_argument("--clip", type=float, default=0.2)
     parser.add_argument("--ent-coef", type=float, default=0.01)
@@ -250,7 +260,8 @@ def main() -> None:
             target=worker_proc,
             args=(w, args.envs_per_worker, n_env, shm_names,
                   act_evs[w], obs_evs[w], stats_q, args.max_steps,
-                  args.gamma, args.shaping_coef, args.workers,
+                  args.gamma, args.shaping_coef, args.joker_coef,
+                  args.workers,
                   args.curriculum_pool, args.curriculum_frac),
             daemon=True,
         )

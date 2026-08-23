@@ -37,8 +37,13 @@ while :; do
     .venv/bin/python -u scripts/train_fast_v3.py --log-dir "$RUN_DIR" \
       "${resume[@]}" >> "$LOG" 2>&1
   else
+    resume=()
+    if [ -f "$RUN_DIR/latest.pt" ]; then
+      resume=(--resume "$RUN_DIR/latest.pt")
+      echo "[supervisor] resuming from $RUN_DIR/latest.pt" | tee -a "$LOG"
+    fi
     echo "[supervisor] $(date -Is) starting trainer (restart $restarts)" | tee -a "$LOG"
-    "$@" >> "$LOG" 2>&1
+    "$@" "${resume[@]}" >> "$LOG" 2>&1
   fi
   code=$?
 
