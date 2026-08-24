@@ -4,9 +4,9 @@ Bots that play Balatro. `watch` a rendered game with live narration (via the
 [balatrobot](https://github.com/coder/balatrobot) JSON-RPC API), or `run`
 batches for stats on an in-process simulator
 ([jackdaw](https://github.com/TylerFlar/jackdaw-balatro), ~1500 games/sec,
-validated 1:1 against the live game — see DESIGN.md).  Both backends speak
+validated 1:1 against the live game).  Both backends speak
 the same RPC surface, so every bot runs unchanged on either: **train on the
-sim, demo on the real game.**  See [DESIGN.md](./DESIGN.md) for the roadmap.
+sim, demo on the real game.**
 
 ## Prerequisites (one-time)
 
@@ -82,5 +82,4 @@ class MyBot:
         return Action("play", {"cards": [0, 1]}, note="yolo")
 ```
 
-Then `balatroai watch --bot mybot`. Contract: snapshot in, one action out —
-see DESIGN.md § extension surface.
+Then `balatroai watch --bot mybot`. Contract: snapshot in, one action out.
