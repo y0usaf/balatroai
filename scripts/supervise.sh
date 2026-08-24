@@ -6,8 +6,8 @@
 # This restarts it, with a cap and a backoff so a genuinely broken
 # configuration fails loudly instead of thrashing.
 #
-#   setsid nohup nix develop -c bash scripts/supervise.sh runs/pointer_v7 \
-#       > runs/pointer_v7/supervisor.log 2>&1 < /dev/null &
+#   setsid nohup nix develop -c bash scripts/supervise.sh runs/pointer_v8 \
+#       > runs/pointer_v8/supervisor.log 2>&1 < /dev/null &
 #
 # With no trainer command after the run directory, runs the v3 pointer
 # trainer (resuming from latest.pt when present).  Otherwise everything

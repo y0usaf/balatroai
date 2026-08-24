@@ -9,7 +9,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-RUN=${RUN:-runs/pointer_v7}
+RUN=${RUN:-runs/pointer_v8}
 GAMES=${GAMES:-60}
 
 echo "=============================================================="

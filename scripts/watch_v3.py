@@ -10,10 +10,10 @@ reported.
 Usage::
 
     # with a balatrobot server already running:
-    uv run python -u scripts/watch_v3.py runs/pointer_v3/latest.pt
+    uv run python -u scripts/watch_v3.py runs/pointer_v8/latest.pt
 
     # or let it spawn the isolated game copy itself:
-    uv run python -u scripts/watch_v3.py runs/pointer_v3/latest.pt --launch
+    uv run python -u scripts/watch_v3.py runs/pointer_v8/latest.pt --launch
 """
 
 from __future__ import annotations
@@ -64,7 +64,7 @@ def describe(fa, gs) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Mirror a v3 checkpoint onto live Balatro")
-    parser.add_argument("model", nargs="?", default="runs/pointer_v3/latest.pt")
+    parser.add_argument("model", nargs="?", default="runs/pointer_v8/latest.pt")
     parser.add_argument("--seed", type=int, default=None,
                         help="game seed (default: random)")
     parser.add_argument("--port", type=int, default=12346)

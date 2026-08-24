@@ -23,12 +23,34 @@ import torch
 from torch import nn
 
 from jackdaw.env.balatro_spec import balatro_game_spec
-from jackdaw.env.gymnasium_wrapper import MAX_ACTIONS
 from jackdaw.env.observation import NUM_CENTER_KEYS
 
-from policy import ENTITIES, GLOBAL_DIM, OBS_DIM, flatten_obs, unflatten_obs  # noqa: F401 (re-export)
 
 _SPEC = balatro_game_spec()
+ENTITIES: list[tuple[str, int, int]] = [
+    (et.name, et.max_count, et.feature_dim) for et in _SPEC.entity_types
+]
+GLOBAL_DIM: int = _SPEC.global_feature_dim
+OBS_DIM: int = GLOBAL_DIM + sum(c * f for _, c, f in ENTITIES) + len(ENTITIES)
+
+
+def flatten_obs(obs: dict[str, np.ndarray]) -> np.ndarray:
+    parts = [obs["global"].ravel()]
+    parts += [obs[name].ravel() for name, _, _ in ENTITIES]
+    parts.append(obs["entity_counts"].ravel())
+    return np.concatenate(parts, dtype=np.float32)
+
+
+def unflatten_obs(x: torch.Tensor) -> dict[str, torch.Tensor]:
+    out: dict[str, torch.Tensor] = {"global": x[:, :GLOBAL_DIM]}
+    off = GLOBAL_DIM
+    for name, count, feat in ENTITIES:
+        out[name] = x[:, off : off + count * feat].reshape(-1, count, feat)
+        off += count * feat
+    out["entity_counts"] = x[:, off : off + len(ENTITIES)]
+    return out
+
+
 N_ACTION_TYPES = len(_SPEC.action_types)
 # Jokers, consumables and shop items are identified only by feature 0,
 # center_key_id / NUM_CENTER_KEYS. As a scalar that is nearly useless: two

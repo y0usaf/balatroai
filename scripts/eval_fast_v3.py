@@ -2,7 +2,7 @@
 
 Usage::
 
-    uv run python -u scripts/eval_fast_v3.py runs/pointer_v3/latest.pt --episodes 200
+    uv run python -u scripts/eval_fast_v3.py runs/pointer_v8/latest.pt --episodes 200
 """
 
 from __future__ import annotations

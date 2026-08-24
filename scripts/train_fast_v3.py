@@ -191,7 +191,7 @@ def main() -> None:
     parser.add_argument("--vf-coef", type=float, default=0.5)
     parser.add_argument("--max-grad-norm", type=float, default=0.5)
     parser.add_argument("--max-steps", type=int, default=3_000)
-    parser.add_argument("--log-dir", type=str, default="runs/pointer_v3")
+    parser.add_argument("--log-dir", type=str, default="runs/pointer_v8")
     parser.add_argument("--checkpoint-every", type=int, default=2_000_000)
     parser.add_argument("--resume", type=str, default=None)
     parser.add_argument("--seed", type=int, default=0)
@@ -477,7 +477,9 @@ def main() -> None:
                 torch.nn.utils.clip_grad_norm_(policy.parameters(), args.max_grad_norm)
                 opt.step()
                 with torch.no_grad():
-                    pg_l += pg.item(); vf_l += vf.item(); ent_l += ent.item()
+                    pg_l += pg.item()
+                    vf_l += vf.item()
+                    ent_l += ent.item()
                     kl += (b_logp[mb] - logp).mean().item()
                 n_upd += 1
 
@@ -486,7 +488,9 @@ def main() -> None:
             if injected:
                 inj_antes.append(a_)
             else:
-                ep_antes.append(a_); ep_rounds.append(r_); ep_wins.append(won)
+                ep_antes.append(a_)
+                ep_rounds.append(r_)
+                ep_wins.append(won)
         t_iter = time.time() - t_start
         sps = int(T * n_env / t_iter)
         writer.add_scalar("perf/sps", sps, global_step)
@@ -511,7 +515,9 @@ def main() -> None:
             line += (f"  ante {np.mean(ep_antes):.2f} (max {np.max(ep_antes)})"
                      f"  win {100 * np.mean(ep_wins):.1f}%"
                      f"  eps {len(ep_antes)}")
-            ep_antes.clear(); ep_rounds.clear(); ep_wins.clear()
+            ep_antes.clear()
+            ep_rounds.clear()
+            ep_wins.clear()
         if inj_antes:
             writer.add_scalar("balatro/mean_ante_injected",
                               np.mean(inj_antes), global_step)

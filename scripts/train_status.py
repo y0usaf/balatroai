@@ -2,7 +2,7 @@
 
 Reads only the run directory, so it never touches the trainer process:
 
-    nix develop -c .venv/bin/python scripts/train_status.py runs/pointer_v4
+    nix develop -c .venv/bin/python scripts/train_status.py runs/pointer_v8
 
 Shows current step, throughput, the ante/win trend over the last window, and
 which checkpoints exist. Pass --watch to refresh every 30 s.
