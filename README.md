@@ -47,10 +47,11 @@ balatroai run --games 20 [--bot heuristic]              # sim backend (default, 
 balatroai run --games 20 --backend live [--launch]      # real game via balatrobot
 ```
 
-The sim backend needs the `sim` extra (jackdaw, fetched from our fork
-`github.com:y0usaf/jackdaw-balatro`, `live-parity` branch, rev-pinned —
-carries our fixes from validating it against live Balatro + smods).  The
-core stays stdlib-only; without the extra, `--backend live` works as before.
+The sim backend needs the `sim` extra (jackdaw, vendored at `vendor/jackdaw`
+— the `live-parity` engine revision validated 1:1 against live Balatro, MIT
+from [TylerFlar/jackdaw-balatro](https://github.com/TylerFlar/jackdaw-balatro);
+see `vendor/jackdaw/PROVENANCE.md`).  The core stays stdlib-only; without the
+extra, `--backend live` works as before.
 
 ## Development
 

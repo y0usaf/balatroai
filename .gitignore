@@ -5,3 +5,7 @@ dist/
 result
 logs/
 runs/
+
+# vendored jackdaw: setuptools metadata uv regenerates on every lock/sync
+vendor/jackdaw/build/
+vendor/jackdaw/*.egg-info/

@@ -11,17 +11,19 @@ dependencies = []
 
 [project.optional-dependencies]
 # jackdaw = validated 1:1 Balatro simulator (live-parity branch: our 11
-# divergence fixes vs Balatro 1.0.1o + smods).  Core stays stdlib-only;
-# the sim backend is opt-in: `uv sync --extra sim`.
+# divergence fixes vs Balatro 1.0.1o + smods), vendored at
+# vendor/jackdaw.  Core stays stdlib-only; the sim backend is opt-in:
+# `uv sync --extra sim`.
 sim = ["jackdaw"]
-# train = RL training stack (torch, sb3-contrib) via jackdaw's train extra.
+# train = RL training stack (torch, sb3-contrib) via the vendored
+# jackdaw's train extra.
 train = ["jackdaw[train]"]
 
 [tool.uv.sources]
-# Our fork (github.com:y0usaf/jackdaw-balatro, mirrored on forgejo at
-# y0usaf-server:3000) carrying the live-parity engine fixes. Rev-pinned for
-# reproducibility; bump by updating `rev` and re-running `uv lock`.
-jackdaw = { git = "ssh://git@github.com/y0usaf/jackdaw-balatro.git", rev = "b3730688f342039fc767776e536cdb294d6c5ac4" }
+# Vendored at vendor/jackdaw (fork github.com/y0usaf/jackdaw-balatro, branch
+# live-parity, commit b3730688f342039fc767776e536cdb294d6c5ac4; see
+# vendor/jackdaw/PROVENANCE.md). No private remote access required.
+jackdaw = { path = "vendor/jackdaw" }
 
 [project.scripts]
 balatroai = "balatroai.cli:main"

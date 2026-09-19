@@ -26,8 +26,8 @@ train = [
 
 [package.metadata]
 requires-dist = [
-    { name = "jackdaw", marker = "extra == 'sim'", git = "ssh://git@github.com/y0usaf/jackdaw-balatro.git?rev=b3730688f342039fc767776e536cdb294d6c5ac4" },
-    { name = "jackdaw", extras = ["train"], marker = "extra == 'train'", git = "ssh://git@github.com/y0usaf/jackdaw-balatro.git?rev=b3730688f342039fc767776e536cdb294d6c5ac4" },
+    { name = "jackdaw", marker = "extra == 'sim'", directory = "vendor/jackdaw" },
+    { name = "jackdaw", extras = ["train"], marker = "extra == 'train'", directory = "vendor/jackdaw" },
 ]
 provides-extras = ["sim", "train"]
 
@@ -201,7 +201,7 @@ wheels = [
 [[package]]
 name = "jackdaw"
 version = "0.1.0"
-source = { git = "ssh://git@github.com/y0usaf/jackdaw-balatro.git?rev=b3730688f342039fc767776e536cdb294d6c5ac4#b3730688f342039fc767776e536cdb294d6c5ac4" }
+source = { directory = "vendor/jackdaw" }
 dependencies = [
     { name = "gymnasium" },
     { name = "numpy" },
@@ -213,6 +213,26 @@ train = [
     { name = "stable-baselines3" },
     { name = "tensorboard" },
     { name = "torch" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "gymnasium", specifier = ">=1.0" },
+    { name = "numpy", specifier = ">=1.24" },
+    { name = "sb3-contrib", marker = "extra == 'train'", specifier = ">=2.3" },
+    { name = "stable-baselines3", marker = "extra == 'train'", specifier = ">=2.3" },
+    { name = "tensorboard", marker = "extra == 'train'", specifier = ">=2.14" },
+    { name = "torch", marker = "extra == 'train'", specifier = ">=2.0" },
+]
+provides-extras = ["train"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "lupa", specifier = ">=2.6" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-cov", specifier = ">=6.0" },
+    { name = "ruff", specifier = ">=0.15.6" },
 ]
 
 [[package]]
